@@ -10,12 +10,12 @@
 ### Week 1 — Project Setup & Environment
 **Goal:** Everyone has a working build environment; project skeleton compiles.
 
-- [ ] Create GitHub repository with branch protection (`main`, `dev`, feature branches)
-- [ ] Set up Android project with Gradle, Kotlin, Jetpack Compose, Hilt [PAIR]
-- [ ] Define package structure matching the Architecture layers
-- [ ] Set up CI (GitHub Actions) — lint + unit test on every PR
-- [ ] Write `README.md` skeleton (project description, setup instructions)
-- [ ] Literature review: WiFi Direct Android API quirks, WifiP2pManager known issues [SOLO per person]
+- [x] Create GitHub repository with branch protection (`main`, `dev`, feature branches)
+- [x] Set up Android project with Gradle, Kotlin, Jetpack Compose, Hilt [PAIR]
+- [x] Define package structure matching the Architecture layers
+- [x] Set up CI (GitHub Actions) — lint + unit test on every PR
+- [x] Write `README.md` skeleton (project description, setup instructions)
+- [x] Literature review: WiFi Direct Android API quirks, WifiP2pManager known issues [SOLO per person]
 
 **Deliverable:** Empty app that launches, with all modules stubbed as empty Kotlin files.
 
@@ -24,11 +24,11 @@
 ### Week 2 — Protocol & Architecture Design Lock
 **Goal:** Final decisions on packet format and architecture are locked before any networking code is written.
 
-- [ ] Finalize `Protocol_Specs.md` — all packet types, header fields, chunk sizes [PAIR]
-- [ ] Finalize `Mesh_Routing_Logic.md` — routing table schema, GO election scoring [PAIR]
-- [ ] Create a shared `model/` package: `ConnectedPeer`, `RouteEntry`, `DataChunk`, `TransferJob` data classes
-- [ ] Review `Architecture.md` as a team; mark any disagreements and resolve them
-- [ ] Set up a physical device lab: label 3–4 Android devices (Device A, B, C, D), document their Android versions
+- [x] Finalize `Protocol_Specs.md` — all packet types, header fields, chunk sizes [PAIR]
+- [x] Finalize `Mesh_Routing_Logic.md` — routing table schema, GO election scoring [PAIR]
+- [x] Create a shared `model/` package: `ConnectedPeer`, `RouteEntry`, `DataChunk`, `TransferJob` data classes
+- [x] Review `Architecture.md` as a team; mark any disagreements and resolve them
+- [x] Set up a physical device lab: label 3–4 Android devices (Device A, B, C, D), document their Android versions
 
 **Deliverable:** All `.md` design docs finalized and committed. Data models committed.
 
@@ -37,11 +37,11 @@
 ### Week 3 — Security Layer Skeleton
 **Goal:** Crypto primitives working in isolation before they touch networking.
 
-- [ ] Implement `EphemeralKeyPair` generation using Bouncy Castle (Curve25519) [SOLO]
-- [ ] Implement `SessionEncryptor` — AES-256-GCM encrypt/decrypt with unique IVs [SOLO]
-- [ ] Implement `PeerKeyStore` — Android KeyStore-backed public key persistence [SOLO]
-- [ ] Write unit tests for each crypto component (known plaintext → ciphertext → verify decryption) [PAIR]
-- [ ] Implement TOFU (Trust On First Use) key acceptance flow
+- [x] Implement `EphemeralKeyPair` generation using Bouncy Castle (Curve25519) [SOLO]
+- [x] Implement `SessionEncryptor` — AES-256-GCM encrypt/decrypt with unique IVs [SOLO]
+- [x] Implement `PeerKeyStore` — Android KeyStore-backed public key persistence [SOLO]
+- [x] Write unit tests for each crypto component (known plaintext → ciphertext → verify decryption) [PAIR]
+- [x] Implement TOFU (Trust On First Use) key acceptance flow
 
 **Deliverable:** Security layer passes all unit tests. No networking yet.
 

@@ -17,6 +17,10 @@ class PeerListViewModel : ViewModel() {
     private val _uiState = MutableStateFlow(PeerListUiState())
     val uiState: StateFlow<PeerListUiState> = _uiState.asStateFlow()
 
+    fun setMode(mode: PeerMode) {
+        _uiState.value = _uiState.value.copy(currentMode = mode)
+    }
+
     fun toggleMode() {
         val nextMode = if (_uiState.value.currentMode == PeerMode.MODE_1_WIFI) {
             PeerMode.MODE_2_MESH
