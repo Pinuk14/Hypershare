@@ -8,7 +8,8 @@ enum class PacketType(val code: Byte) {
     STREAM(0x05.toByte()),
     RREQ(0x06.toByte()),
     RREP(0x07.toByte()),
-    RERR(0x08.toByte());
+    RERR(0x08.toByte()),
+    READ_ACK(0x09.toByte());
 
     companion object {
         fun fromCode(code: Byte): PacketType? = entries.find { it.code == code }

@@ -2,10 +2,12 @@ package com.hypershare.application
 
 import android.app.Application
 
+import com.hypershare.service.LanSocketManager
+
 class HyperShareApplication : Application() {
 
     override fun onCreate() {
         super.onCreate()
-        // Application-wide initialization
+        LanSocketManager.getInstance().init(this)
     }
 }
