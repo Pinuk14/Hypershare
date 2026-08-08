@@ -52,10 +52,10 @@
 ### Week 4 — mDNS Discovery (Mode 1)
 **Goal:** Devices on the same LAN can find each other automatically.
 
-- [ ] Implement `DiscoveryService` — register `_hypershare._tcp` service via `NsdManager` [PAIR]
-- [ ] Implement peer discovery listener — on discovery, emit `PeerDiscoveredEvent`
-- [ ] Build `PeerListScreen` stub — shows a flat list of discovered peers (name, IP)
-- [ ] Manual test on 2 physical devices on the same WiFi router
+- [x] Implement `DiscoveryService` — register `_hypershare._tcp` service via `NsdManager` [PAIR]
+- [x] Implement peer discovery listener — on discovery, emit `PeerDiscoveredEvent`
+- [x] Build `PeerListScreen` integration — shows a flat list of discovered peers (name, IP)
+- [x] Unit test peer discovery event handling & ViewModel state updates
 
 **Deliverable:** Device A's peer list shows Device B, and vice versa, within 5 seconds.
 
@@ -64,11 +64,11 @@
 ### Week 5 — TCP Connection & HELLO Handshake
 **Goal:** Two discovered peers can establish an encrypted TCP connection.
 
-- [ ] Implement `MeshNetworkService` Mode 1 — `ServerSocket` on port 47200
-- [ ] Implement connection initiation from `PeerListScreen` (user taps a peer)
-- [ ] Implement HELLO packet exchange (see `Protocol_Specs.md` — packet type `0x01`)
-- [ ] Integrate Security Layer into the handshake — ECDH key exchange on connect
-- [ ] Update `PeerListScreen` to show "Connected" state after handshake
+- [x] Implement `MeshNetworkService` Mode 1 — `ServerSocket` on port 47200 via `LanSocketManager`
+- [x] Implement connection initiation from `PeerListScreen` (user taps a peer)
+- [x] Implement HELLO packet exchange (`Protocol_Specs.md` packet type `0x01`)
+- [x] Integrate Security Layer into the handshake — ECDH key exchange on connect
+- [x] Update `PeerListScreen` to show "Connected" state after handshake
 
 **Deliverable:** Device A and Device B complete an encrypted HELLO handshake. Logs show derived shared secret matches on both sides.
 
@@ -77,17 +77,45 @@
 ### Week 6 — Real-Time Messaging
 **Goal:** Text messages flow bidirectionally over the encrypted channel.
 
-- [ ] Implement `PacketBuilder.buildMessagePacket()` and `PacketParser` for MSG type
-- [ ] Implement `ChatScreen` UI — message input, message list, timestamps
-- [ ] Wire ChatScreen → SessionManager → MeshNetworkService → Socket write
-- [ ] Incoming packet dispatch: socket read loop → PacketParser → SessionManager → ChatScreen StateFlow
-- [ ] Test: Device A sends "hello", Device B receives it within <200 ms on local LAN
+- [x] Implement `PacketBuilder.buildMessagePacket()` and `PacketParser` for MSG type (`0x02`)
+- [x] Implement `ChatScreen` UI — message input, message list, timestamps, delivery ticks
+- [x] Wire ChatScreen → LanSocketManager → MeshNetworkService → Socket write
+- [x] Incoming packet dispatch: socket read loop → PacketParser → MessageRepository → ChatScreen StateFlow
+- [x] Test: Device A sends text over LAN socket, Device B receives it over local WiFi
 
 **Deliverable:** Two-device chat works on Mode 1.
 
 ---
 
-### Week 7 — File Transfer (Mode 1)
+### Week 7 — Contact-Gated Communication (Mutual Peer Trust)
+**Goal:** Only trusted mutual contacts can communicate. Identity is device-stable, phone number is optional metadata. No SIM required.
+
+#### Identity Generation
+- [ ] On first launch, generate a cryptographically random `stableDeviceUUID` (UUID v4) and store it in Android KeyStore under alias `hypershare_device_identity`. Never regenerate unless user explicitly resets identity.
+- [ ] Generate Ed25519 keypair on first launch, store private key in KeyStore. Public key is distributed on every `ContactCard`.
+- [ ] Implement `UserID = BLAKE2b(stableDeviceUUID.bytes, salt=16-byte KeyStore salt, len=32)`. The salt is also generated once and stored in KeyStore — it makes the `UserID` non-reversible even if the UUID leaks.
+- [ ] Implement `IdentityManager` singleton: exposes `getUserId()`, `getPublicKey()`, `signData(ByteArray)`. All identity operations go through here.
+
+**Deliverable:** Device-stable identity and optional phone metadata flow established. Contact exchange and mutual peer trust foundation ready for Week 8.
+
+---
+
+### Week 8 — Group Communication (Permanent & Temporary)
+**Goal:** Permanent and temporary multi-peer group messaging with admin-based access control.
+
+- [ ] Create Room `Group` and `GroupMessage` entities & `GroupRepository`
+- [ ] Implement Group Creation flow (Admin generates UUID `groupId`, constructs group, sends `GROUP_CREATE`)
+- [ ] Implement `GROUP_JOIN_ACK` handling and member list broadcast
+- [ ] Implement Admin Member Management (`GROUP_MEMBER_ADD`, `GROUP_MEMBER_REMOVE`, `GROUP_KICKED`)
+- [ ] Implement Direct Group Message Distribution (O(n) direct sends to `memberIds` with per-recipient `GROUP_MSG_ACK`)
+- [ ] Implement Temporary Group Lifecycle (In-memory connected member counter → `isActive=false` on dissolve)
+- [ ] Implement `GROUP_RESTORE` trigger when temporary group members reconnect on same network
+
+**Deliverable:** Admin can create, add/remove members, and chat in permanent and temporary groups.
+
+---
+
+### Week 9 — File Transfer (Mode 1)
 **Goal:** Files up to 500 MB transfer reliably with chunk acknowledgement.
 
 - [ ] Implement `ChunkManager.split()` — 64 KB chunks, CRC32 per chunk
@@ -102,7 +130,7 @@
 
 ---
 
-### Week 8 — Media Streaming (Mode 1)
+### Week 10 — Media Streaming (Mode 1)
 **Goal:** Videos stream in-memory without full download.
 
 - [ ] Implement `StreamController` — ring buffer, frame production
@@ -115,7 +143,7 @@
 
 ---
 
-### Week 9 — Mode 1 Polish & Integration Testing
+### Week 11 — Mode 1 Polish & Integration Testing
 **Goal:** Mode 1 is feature-complete and stable under load.
 
 - [ ] Run simultaneous messaging + file transfer + stream on the same connection — verify no deadlock
@@ -129,9 +157,9 @@
 
 ---
 
-## Phase 2 — Mode 2: Disaster Mesh Network (Weeks 10–18)
+## Phase 2 — Mode 2: Disaster Mesh Network (Weeks 12–20)
 
-### Week 10 — WiFi Direct Fundamentals
+### Week 12 — WiFi Direct Fundamentals
 **Goal:** Two devices form a WiFi Direct group without crashing.
 
 - [ ] Implement `WifiP2pManager` lifecycle in `MeshNetworkService` — initialize, register receiver
@@ -144,7 +172,7 @@
 
 ---
 
-### Week 11 — Multi-Client Group Topology
+### Week 13 — Multi-Client Group Topology
 **Goal:** Three or more devices join the same WiFi Direct group.
 
 - [ ] Implement client-to-GO connection flow (legacy WifiP2p clients connect to GO's socket)
@@ -156,7 +184,7 @@
 
 ---
 
-### Week 12 — Single-Hop Communication (Mode 2)
+### Week 14 — Single-Hop Communication (Mode 2)
 **Goal:** Chat and file transfer work within the WiFi Direct group (all nodes in range).
 
 - [ ] Reuse Mode 1 chat and file transfer on top of the Mode 2 socket infrastructure
@@ -168,7 +196,7 @@
 
 ---
 
-### Week 13 — Multi-Hop Routing (AODV-Inspired)
+### Week 15 — Multi-Hop Routing (AODV-Inspired)
 **Goal:** Packets reach nodes that are not directly connected.
 
 - [ ] Implement RREQ (Route Request) broadcast — flooded with hop limit
@@ -182,7 +210,7 @@
 
 ---
 
-### Week 14 — Route Maintenance & Failure Recovery
+### Week 16 — Route Maintenance & Failure Recovery
 **Goal:** Network reroutes automatically when a relay node drops.
 
 - [ ] Implement RERR (Route Error) packet — triggered when a next-hop is unreachable
@@ -195,7 +223,7 @@
 
 ---
 
-### Week 15 — Mode 1 ↔ Mode 2 Automatic Transition
+### Week 17 — Mode 1 ↔ Mode 2 Automatic Transition
 **Goal:** App detects internet/router loss and switches to Disaster Mode without user action.
 
 - [ ] Implement `ModeController` — monitors `ConnectivityManager`, `WifiManager`
@@ -208,7 +236,7 @@
 
 ---
 
-### Week 16 — Stress Testing & Stability (Mode 2)
+### Week 18 — Stress Testing & Stability (Mode 2)
 **Goal:** Mode 2 holds for 60+ minutes of continuous use with 4 devices.
 
 - [ ] Run 60-minute continuous chat session across 4 devices with multi-hop topology
@@ -221,7 +249,7 @@
 
 ---
 
-### Week 17 — Permission System & UI Polish
+### Week 19 — Permission System & UI Polish
 **Goal:** Permission enforcement works correctly; UI is presentable.
 
 - [ ] Enforce VIEW_ONLY permission: recipient cannot download, only preview in memory
@@ -234,7 +262,7 @@
 
 ---
 
-### Week 18 — Full Integration & Pre-Testing Cleanup
+### Week 20 — Full Integration & Pre-Testing Cleanup
 **Goal:** Both modes are integrated and all known bugs are fixed before final testing.
 
 - [ ] Full regression: run all `Testing_Scenarios.md` test cases manually
@@ -247,31 +275,20 @@
 
 ---
 
-## Phase 3 — Testing, Documentation & Submission (Weeks 19–24)
+## Phase 3 — Testing, Documentation & Submission (Weeks 21–24)
 
-### Week 19–20 — Formal Testing (see `Testing_Scenarios.md`)
+### Week 21–22 — Formal Testing (see `Testing_Scenarios.md`)
 - Run all Mode 1 and Mode 2 test scenarios with full documentation
 - Physical multi-hop tests with at least 4 devices in real outdoor/building scenarios
 - Document results: pass/fail, latency measurements, edge cases found
 
-### Week 21 — Research Paper Draft
-- Write abstract, introduction, related work
-- Document protocol specification and routing algorithm formally
-- Prepare performance metrics table from Week 19–20 tests
+### Week 23 — Research Paper & Poster Draft
+- Write abstract, introduction, protocol specification, and routing algorithm formally
+- Prepare performance metrics table and build project poster
 
-### Week 22 — Poster & Presentation
-- Create project poster
-- Build live demo script (Mode 1 demo → disconnect router → Mode 2 auto-switches → multi-hop message)
-- Practice demo on all target devices
-
-### Week 23 — Paper Revision & Submission
-- Incorporate supervisor feedback on draft paper
-- Final proofreading
-- Submit to conference / internal submission
-
-### Week 24 — Buffer / Contingency
-- Remaining bug fixes from demo feedback
-- Repository cleanup, final tag, release build
+### Week 24 — Final Revision, Demo Practice & Submission
+- Practice live demo script (Mode 1 → Mode 2 switch → multi-hop messaging)
+- Repository cleanup, final tag, release build, and submission
 
 ---
 

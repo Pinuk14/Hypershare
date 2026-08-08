@@ -1,4 +1,4 @@
-<div align="center">
+<div align = "center">
 
 ```
 ██╗  ██╗██╗   ██╗██████╗ ███████╗██████╗ ███████╗██╗  ██╗ █████╗ ██████╗ ███████╗
@@ -190,7 +190,7 @@ No third-party networking library. All socket management is hand-rolled to keep 
 ### Build & Run
 
 ```bash
-git clone https://github.com/<your-org>/hypershare.git
+git clone https://github.com/Pinuk14/hypershare.git
 cd hypershare
 ./gradlew assembleDebug
 ```

@@ -84,6 +84,15 @@ Offset  Size  Field             Type        Description
 | `0x11` | `TRANSFER_COMPLETE` | Unicast | Signals all chunks for a transfer have been sent. |
 | `0x12` | `STREAM_INIT` | Unicast | Announces an upcoming stream (codec, bitrate metadata). |
 | `0x13` | `STREAM_END` | Unicast | Stream has ended. |
+| `0x20` | `GROUP_CREATE` | Unicast | Admin creates a group and distributes to initial members. |
+| `0x21` | `GROUP_JOIN_ACK` | Unicast | Member accepts group invite. |
+| `0x22` | `GROUP_MSG` | Unicast | A message sent to a group. |
+| `0x23` | `GROUP_MSG_ACK` | Unicast | Per-recipient group message acknowledgement. |
+| `0x24` | `GROUP_MEMBER_ADD` | Unicast | Admin adds a new member to an existing group. |
+| `0x25` | `GROUP_MEMBER_REMOVE` | Unicast | Admin removes a member from a group. |
+| `0x26` | `GROUP_KICKED` | Unicast | Notification sent to the removed member. |
+| `0x27` | `GROUP_DISSOLVE` | Broadcast/Unicast | Admin explicitly dissolves a group early. |
+| `0x28` | `GROUP_RESTORE` | Unicast | Trigger group reactivation when members reconnect. |
 | `0xFF` | `ERROR` | Unicast | Generic error response with error code in payload. |
 
 ---
@@ -368,6 +377,52 @@ Device A                                      Device B
 | `47200` | TCP | Main data channel (all packet types after handshake) |
 | `47201` | UDP | Pre-connection HELLO broadcast (GO election, Mode 2 only) |
 | `47202` | UDP | mDNS supplemental discovery ping (Mode 1 only) |
+
+---
+
+## 10. Contact-Gated Mutual Trust Specification
+
+### 10.1 UserID Generation & Salt
+```
+UserID = BLAKE2b(
+    input  = STABLE_DEVICE_UUID + PHONE_NUMBER,
+    salt   = KeyStore_16byte_salt,
+    length = 32 bytes (64 hex characters)
+)
+```
+- **STABLE_DEVICE_UUID**: Persistent UUID generated on first app launch and stored securely in Android KeyStore.
+- **KeyStore Salt**: Random 16-byte salt generated per device to prevent rainbow-table precomputation attacks.
+
+### 10.2 ContactCard Structure & QR Code Exchange
+```kotlin
+data class ContactCard(
+    val userId: String,          // 32-byte BLAKE2b hash (hex-encoded)
+    val displayName: String,     // Chosen display name at exchange time
+    val publicKey: ByteArray,    // Ed25519 public key (32 bytes)
+    val cardSignature: ByteArray // Ed25519 signature over (userId + displayName)
+)
+```
+- **Physical Proximity Handshake**: Device A displays QR code containing serialized `ContactCard`. Device B scans QR code, verifies Ed25519 signature, and transmits its own `ContactCard` over the newly established encrypted channel. Mutual verification promotes both peers to "Trusted Contacts".
+
+---
+
+## 11. Group Management & Messaging Protocol (Packet Types 0x20–0x28)
+
+### 11.1 Group Data Model & Types
+- **PERMANENT**: Persistent group. Messages & active membership remain in local Room DB across app restarts.
+- **TEMPORARY**: Session-based group. Messages remain in local Room DB (`isActive=false` on dissolve); active group session dissolved when all members disconnect.
+
+### 11.2 Group Packet Payloads
+- **`GROUP_CREATE` (`0x20`)**: Payload contains `groupId` (UUID), `groupName`, `adminUserId`, `groupType`, and initial `memberList` (JSON).
+- **`GROUP_JOIN_ACK` (`0x21`)**: Payload contains `groupId` and `joiningUserId`.
+- **`GROUP_MSG` (`0x22`)**: Payload contains `groupId`, `messageId`, `senderId`, `senderTimestamp`, and encrypted `content`.
+- **`GROUP_MSG_ACK` (`0x23`)**: Payload contains `groupId` and `messageId`.
+- **`GROUP_MEMBER_ADD` (`0x24`)**: Payload contains `groupId`, `newMemberUserId`, `displayName`, and `publicKey`.
+- **`GROUP_MEMBER_REMOVE` (`0x25`)**: Payload contains `groupId` and `removedUserId`. Admin signature required.
+- **`GROUP_KICKED` (`0x26`)**: Payload contains `groupId` and `reason`.
+- **`GROUP_DISSOLVE` (`0x27`)**: Payload contains `groupId` and `dissolveTimestamp`.
+- **`GROUP_RESTORE` (`0x28`)**: Payload contains `groupId` and `currentActiveMemberIds`. Triggered upon peer reconnection.
+
 
 ---
 

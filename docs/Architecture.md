@@ -75,6 +75,16 @@ HyperShare follows a **layered, modular architecture** built around Android's ne
 - Manages ring-buffer backed `StreamSession` objects.
 - Produces `ByteArray` frames consumed by `StreamPlayerScreen` without writing to disk.
 
+#### `ContactManager` (Trust Engine)
+- Manages UserID derivation (`BLAKE2b(UUID + phone, salt)`), Android KeyStore 16-byte salt, and Ed25519 signing keys.
+- Handles QR Code `ContactCard` serialization/deserialization and signature verification.
+- Interacts with Room `ContactRepository` to maintain mutual trust state (`isMutual`).
+
+#### `GroupManager` (Group Engine)
+- Manages lifecycle of Permanent and Temporary groups (`Group`, `GroupMessage`, `GroupType`).
+- Handles group creation, invitation dispatch (`GROUP_CREATE`), member addition/removal (`GROUP_MEMBER_ADD`, `GROUP_MEMBER_REMOVE`), and group dissolution (`GROUP_DISSOLVE`).
+- Coordinates direct O(n) message distribution and handles `GROUP_RESTORE` triggers upon peer reconnection.
+
 ---
 
 ### 2.3 Service Layer (Foreground Services)
@@ -89,7 +99,7 @@ All three run as **Android Foreground Services** with a persistent notification.
 #### `DiscoveryService`
 - **Mode 1:** Uses Android's `NsdManager` (Network Service Discovery / mDNS) to advertise and discover `_hypershare._tcp` services on the local network.
 - **Mode 2:** Uses `WifiP2pManager.discoverPeers()` and `WifiP2pManager.requestPeers()` with a BroadcastReceiver for peer list updates.
-- On discovery, emits `PeerDiscoveredEvent` into the session bus.
+- **Trust Gate Filtering:** Cross-references discovered peer UserIDs against Room `ContactRepository`. Non-contact strangers are filtered out from the UI peer list; trusted mutual contacts are emitted as `PeerDiscoveredEvent`s.
 
 #### `TransferService`
 - Pulls from `TransferQueue` and writes chunks over the active socket to the destination peer.

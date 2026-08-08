@@ -50,6 +50,16 @@ Run this command in the terminal to compile and install HyperShare on your phone
 $env:JAVA_HOME="C:\Users\ADMIN\.vscode\extensions\redhat.java-1.51.0-win32-x64\jre\21.0.9-win32-x86_64"; .\gradlew.bat installDebug
 ```
 
+> [!TIP]
+> **If you see `INSTALL_FAILED_USER_RESTRICTED` (Xiaomi / Redmi / POCO devices):**
+> 1. **Unlock the phone screen** before running the install command.
+> 2. Watch your phone screen when installing — tap **ALLOW** / **INSTALL** on the Security Pop-up.
+> 3. Go to **Settings** -> **Developer Options** -> Enable **"Install via USB"**.
+> 4. Alternatively install via ADB directly:
+>    ```powershell
+>    C:\Users\ADMIN\AppData\Local\Android\Sdk\platform-tools\adb.exe install -r app\build\outputs\apk\debug\app-debug.apk
+>    ```
+
 #### 3. Launch App Automatically
 Launch HyperShare on your phone screen:
 ```powershell
@@ -76,4 +86,8 @@ Once open on your phone:
 * **Inspect live UI layout tree**:
   ```powershell
   android layout --pretty
+  ```
+* **Capture screenshots of all devices**:
+  ```powershell
+  $ts = Get-Date -Format "yyyyMMdd_HHmmss"; android screen capture --device="20805d020409" -o="screenshots/device_20805d020409_$ts.png"; android screen capture --device="mzv4pfkvlnf6bqx4" -o="screenshots/device_mzv4pfkvlnf6bqx4_$ts.png"
   ```
