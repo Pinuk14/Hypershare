@@ -91,10 +91,10 @@
 **Goal:** Only trusted mutual contacts can communicate. Identity is device-stable, phone number is optional metadata. No SIM required.
 
 #### Identity Generation
-- [ ] On first launch, generate a cryptographically random `stableDeviceUUID` (UUID v4) and store it in Android KeyStore under alias `hypershare_device_identity`. Never regenerate unless user explicitly resets identity.
-- [ ] Generate Ed25519 keypair on first launch, store private key in KeyStore. Public key is distributed on every `ContactCard`.
-- [ ] Implement `UserID = BLAKE2b(stableDeviceUUID.bytes, salt=16-byte KeyStore salt, len=32)`. The salt is also generated once and stored in KeyStore — it makes the `UserID` non-reversible even if the UUID leaks.
-- [ ] Implement `IdentityManager` singleton: exposes `getUserId()`, `getPublicKey()`, `signData(ByteArray)`. All identity operations go through here.
+- [x] On first launch, generate a cryptographically random `stableDeviceUUID` (UUID v4) and store it in Android KeyStore under alias `hypershare_device_identity`. Never regenerate unless user explicitly resets identity.
+- [x] Generate Ed25519 keypair on first launch, store private key in KeyStore. Public key is distributed on every `ContactCard`.
+- [x] Implement `UserID = BLAKE2b(stableDeviceUUID.bytes, salt=16-byte KeyStore salt, len=32)`. The salt is also generated once and stored in KeyStore — it makes the `UserID` non-reversible even if the UUID leaks.
+- [x] Implement `IdentityManager` singleton: exposes `getUserId()`, `getPublicKey()`, `signData(ByteArray)`. All identity operations go through here.
 
 **Deliverable:** Device-stable identity and optional phone metadata flow established. Contact exchange and mutual peer trust foundation ready for Week 8.
 
