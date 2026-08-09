@@ -1,6 +1,7 @@
 package com.hypershare.ui.components
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -13,10 +14,13 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.hypershare.ui.theme.GlassBorder
 import com.hypershare.ui.theme.SignalBlue
+import com.hypershare.ui.theme.SurfaceCard
 import com.hypershare.ui.theme.TextPrimary
 import com.hypershare.ui.theme.TextSecondary
 
@@ -34,17 +38,19 @@ fun BottomNavBar(
     onOpenAppSettings: () -> Unit = {},
     onOpenAccountSettings: () -> Unit = {},
     onOpenHome: () -> Unit = {},
+    onOpenQrScanner: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     Box(
         modifier = modifier
             .fillMaxWidth()
-            .height(64.dp)
-            .background(SignalBlue, RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp))
+            .height(68.dp)
+            .background(SurfaceCard, RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp))
+            .border(width = 1.dp, color = GlassBorder, shape = RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp))
             .padding(horizontal = 24.dp)
     ) {
         Row(
-            modifier = Modifier.fillMaxWidth().height(64.dp),
+            modifier = Modifier.fillMaxWidth().height(68.dp),
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically
         ) {
@@ -52,13 +58,13 @@ fun BottomNavBar(
             Box(
                 modifier = Modifier
                     .clickable { onOpenAppSettings() }
-                    .padding(8.dp),
+                    .padding(10.dp),
                 contentAlignment = Alignment.Center
             ) {
                 Text(
                     text = "⚙",
-                    color = if (selectedTab == NavTab.SETTINGS) TextPrimary else TextSecondary,
-                    fontSize = 20.sp
+                    color = if (selectedTab == NavTab.SETTINGS) SignalBlue else TextSecondary,
+                    fontSize = 22.sp
                 )
             }
 
@@ -66,28 +72,28 @@ fun BottomNavBar(
             Box(
                 modifier = Modifier
                     .clickable { onOpenAccountSettings() }
-                    .padding(8.dp),
+                    .padding(10.dp),
                 contentAlignment = Alignment.Center
             ) {
                 Text(
                     text = "👤",
-                    color = if (selectedTab == NavTab.ACCOUNT) TextPrimary else TextSecondary,
-                    fontSize = 22.sp,
+                    color = if (selectedTab == NavTab.ACCOUNT) SignalBlue else TextSecondary,
+                    fontSize = 24.sp,
                     fontWeight = if (selectedTab == NavTab.ACCOUNT) FontWeight.Bold else FontWeight.Normal
                 )
             }
 
-            // Scan / Home Icon (⛶) -> Home Screen
+            // Scan / Home Icon (⛶) -> Open QR Scanner
             Box(
                 modifier = Modifier
-                    .clickable { onOpenHome() }
-                    .padding(8.dp),
+                    .clickable { if (onOpenQrScanner != {}) onOpenQrScanner() else onOpenHome() }
+                    .padding(10.dp),
                 contentAlignment = Alignment.Center
             ) {
                 Text(
                     text = "⛶",
-                    color = if (selectedTab == NavTab.HOME) TextPrimary else TextSecondary,
-                    fontSize = 22.sp,
+                    color = if (selectedTab == NavTab.HOME) SignalBlue else TextSecondary,
+                    fontSize = 24.sp,
                     fontWeight = if (selectedTab == NavTab.HOME) FontWeight.Bold else FontWeight.Normal
                 )
             }
