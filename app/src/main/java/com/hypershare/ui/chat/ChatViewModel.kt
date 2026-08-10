@@ -33,6 +33,9 @@ data class ChatUiState(
     val peerName: String = "Peer",
     val peerIpAddress: String = "",
     val hopCount: Int = 1,
+    val isPeerTrusted: Boolean = false,
+    val hasPeerAcceptedUs: Boolean = false,
+    val untrustedOutgoingCount: Int = 0,
     val messages: List<ChatMessageItem> = emptyList(),
     val inputText: String = ""
 )
@@ -47,6 +50,7 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
 
     fun loadPeerMessages(
         peerId: String,
+        peerName: String = "",
         targetIp: String = "",
         myId: String = "local",
         msgRepo: MessageRepository? = null,
@@ -55,22 +59,57 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
         socketManager = lanSocketMgr
         myPeerId = myId
 
+        val initialName = if (peerName.isNotEmpty() && peerName != peerId) {
+            peerName
+        } else {
+            peerId.take(12)
+        }
+
         _uiState.value = _uiState.value.copy(
             peerId = peerId,
-            peerName = peerId.replace("HyperShare_", "").replace("_", " "),
+            peerName = initialName,
             peerIpAddress = targetIp
         )
 
-        // Load persisted history from SQLite on IO thread
+        // Load persisted history, display name, trust status, peer acceptance, and outgoing count from SQLite on IO thread
         viewModelScope.launch {
-            val historicalMessages = withContext(Dispatchers.IO) {
-                repository.getMessagesForPeer(peerId)
+            val (historicalMessages, dbDisplayName, isTrusted, hasPeerAccepted, outgoingCount) = withContext(Dispatchers.IO) {
+                Quintuple(
+                    repository.getMessagesForPeer(peerId),
+                    repository.getPeerDisplayName(peerId),
+                    repository.isPeerTrusted(peerId),
+                    repository.hasPeerAcceptedUs(peerId),
+                    repository.getOutgoingMessageCountForPeer(peerId)
+                )
             }
+
+            val finalName = if (!dbDisplayName.isNullOrEmpty()) {
+                dbDisplayName
+            } else if (peerName.isNotEmpty() && peerName != peerId) {
+                peerName
+            } else {
+                initialName
+            }
+
+            // Save peer in DB if valid name provided
+            if (peerName.isNotEmpty() && peerName != peerId) {
+                withContext(Dispatchers.IO) {
+                    repository.savePeer(peerId, peerName)
+                }
+            }
+
             // Merge existing in-memory (from live session) with DB history, sorted by timestamp
             val merged = (_uiState.value.messages + historicalMessages)
                 .distinctBy { it.id }
                 .sortedBy { it.timestamp }
-            _uiState.value = _uiState.value.copy(messages = merged)
+
+            _uiState.value = _uiState.value.copy(
+                peerName = finalName,
+                isPeerTrusted = isTrusted,
+                hasPeerAcceptedUs = hasPeerAccepted,
+                untrustedOutgoingCount = outgoingCount,
+                messages = merged
+            )
 
             // Trigger READ_ACK for any unread incoming messages now that DB load is complete
             markMessagesAsRead()
@@ -90,36 +129,39 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
                     handleAckEvent(ack.msgId, ack.status)
                 }
             }
+
+            // Observe CONTACT_ACCEPT events from peer
+            viewModelScope.launch {
+                mgr.contactAcceptEventsFlow.collect { event ->
+                    if (event.peerId == peerId) {
+                        _uiState.value = _uiState.value.copy(hasPeerAcceptedUs = true)
+                    }
+                }
+            }
         }
     }
+
+    private data class Quintuple<A, B, C, D, E>(val first: A, val second: B, val third: C, val fourth: D, val fifth: E)
 
     fun markMessagesAsRead() {
         val peerId = _uiState.value.peerId
         val targetIp = _uiState.value.peerIpAddress
-        val currentMessages = _uiState.value.messages
+        val unreadIncoming = _uiState.value.messages.filter { !it.isOutgoing && it.status != MessageStatus.READ }
+        if (unreadIncoming.isEmpty()) return
 
-        val unread = currentMessages.filter { !it.isOutgoing && it.status == MessageStatus.DELIVERED }
-        if (unread.isEmpty()) return
-
-        // 1. Update local UI state to MessageStatus.READ
-        val updatedList = currentMessages.map { msg ->
-            if (!msg.isOutgoing && msg.status == MessageStatus.DELIVERED) {
-                msg.copy(status = MessageStatus.READ)
-            } else {
-                msg
-            }
+        val updated = _uiState.value.messages.map { msg ->
+            if (!msg.isOutgoing && msg.status != MessageStatus.READ) msg.copy(status = MessageStatus.READ) else msg
         }
-        _uiState.value = _uiState.value.copy(messages = updatedList)
+        _uiState.value = _uiState.value.copy(messages = updated)
 
-        // 2. Update local SQLite DB & dispatch READ_ACK packets over socket
-        unread.forEach { msg ->
-            viewModelScope.launch(Dispatchers.IO) {
+        viewModelScope.launch(Dispatchers.IO) {
+            for (msg in unreadIncoming) {
                 repository.updateMessageStatus(msg.id, MessageStatus.READ)
             }
             socketManager?.sendAckPacket(
                 targetPeerId = peerId,
                 targetIp = targetIp,
-                msgId = msg.id,
+                msgId = unreadIncoming.last().id,
                 ackType = com.hypershare.model.PacketType.READ_ACK,
                 senderPeerId = myPeerId
             )
@@ -138,12 +180,29 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     fun updateInputText(text: String) {
-        _uiState.value = _uiState.value.copy(inputText = text)
+        val isMutualTrust = _uiState.value.isPeerTrusted && _uiState.value.hasPeerAcceptedUs
+        val capped = if (!isMutualTrust && text.length > 300) {
+            text.take(300)
+        } else {
+            text
+        }
+        _uiState.value = _uiState.value.copy(inputText = capped)
     }
 
     fun sendMessage() {
-        val text = _uiState.value.inputText.trim()
-        if (text.isEmpty()) return
+        val rawText = _uiState.value.inputText.trim()
+        if (rawText.isEmpty()) return
+
+        val isMutualTrust = _uiState.value.isPeerTrusted && _uiState.value.hasPeerAcceptedUs
+        val currentOutgoingCount = _uiState.value.untrustedOutgoingCount
+
+        // Enforce 2-message cap until BOTH users have accepted contact
+        if (!isMutualTrust && currentOutgoingCount >= 2) {
+            return
+        }
+
+        // Enforce 300 character max limit until mutual trust is established
+        val text = if (!isMutualTrust && rawText.length > 300) rawText.take(300) else rawText
 
         val msgId = java.util.UUID.randomUUID().toString()
         val newMessage = ChatMessageItem(
@@ -155,8 +214,11 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
         )
 
         val updatedList = (_uiState.value.messages + newMessage).distinctBy { it.id }
+        val nextOutgoingCount = if (!isMutualTrust) currentOutgoingCount + 1 else currentOutgoingCount
+
         _uiState.value = _uiState.value.copy(
             messages = updatedList,
+            untrustedOutgoingCount = nextOutgoingCount,
             inputText = ""
         )
 
@@ -204,5 +266,24 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
             repository.deleteChatHistory(peerId)
         }
         _uiState.value = _uiState.value.copy(messages = emptyList())
+    }
+
+    fun acceptContactTrust() {
+        val currentPeerId = _uiState.value.peerId
+        val targetIp = _uiState.value.peerIpAddress
+        if (currentPeerId.isEmpty()) return
+
+        viewModelScope.launch(Dispatchers.IO) {
+            repository.markPeerAsTrusted(currentPeerId)
+            withContext(Dispatchers.Main) {
+                _uiState.value = _uiState.value.copy(isPeerTrusted = true)
+            }
+            // Send CONTACT_ACCEPT packet to peer over TCP
+            socketManager?.sendContactAcceptPacket(
+                targetPeerId = currentPeerId,
+                targetIp = targetIp,
+                senderPeerId = myPeerId
+            )
+        }
     }
 }
