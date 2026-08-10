@@ -1,22 +1,36 @@
 package com.hypershare.ui.settings
 
-import androidx.lifecycle.ViewModel
+import android.app.Application
+import androidx.lifecycle.AndroidViewModel
+import com.hypershare.application.UserIdentityManager
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 
 data class AccountSettingsUiState(
-    val username: String = "USER_NAME",
-    val peerId: String = "HYPERSHARE-NODE-8X92",
-    val publicKeyFingerprint: String = "EC:3B:82:F6:14:B8:A6:22:C5:5E:F5:9E:0B",
+    val username: String = "",
+    val peerId: String = "",
+    val publicKeyFingerprint: String = "",
     val isIdentityVerified: Boolean = true
 )
 
-class AccountSettingsViewModel : ViewModel() {
-    private val _uiState = MutableStateFlow(AccountSettingsUiState())
+class AccountSettingsViewModel(application: Application) : AndroidViewModel(application) {
+
+    private val identityManager = UserIdentityManager.getInstance(application)
+
+    private val _uiState = MutableStateFlow(
+        AccountSettingsUiState(
+            username = identityManager.getUsername(),
+            peerId = identityManager.getPeerId(),
+            publicKeyFingerprint = identityManager.getKeyFingerprint()
+        )
+    )
     val uiState: StateFlow<AccountSettingsUiState> = _uiState.asStateFlow()
 
     fun updateUsername(newName: String) {
-        _uiState.value = _uiState.value.copy(username = newName)
+        val trimmed = newName.trim()
+        if (trimmed.isEmpty()) return
+        identityManager.setUsername(trimmed)
+        _uiState.value = _uiState.value.copy(username = trimmed)
     }
 }
