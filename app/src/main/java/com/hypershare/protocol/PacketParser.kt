@@ -19,12 +19,14 @@ object PacketParser {
         val packetType = PacketType.fromCode(typeCode)
             ?: throw IllegalArgumentException("Unknown packet type code: $typeCode")
 
-        val srcLen = buffer.short.toInt()
+        // Use and(0xFFFF) to treat the 2-byte length as unsigned — prevents
+        // NegativeArraySizeException when the high-bit of the short is set.
+        val srcLen = buffer.short.toInt() and 0xFFFF
         val srcBytes = ByteArray(srcLen)
         buffer.get(srcBytes)
         val srcPeerId = String(srcBytes, StandardCharsets.UTF_8)
 
-        val dstLen = buffer.short.toInt()
+        val dstLen = buffer.short.toInt() and 0xFFFF
         val dstBytes = ByteArray(dstLen)
         buffer.get(dstBytes)
         val dstPeerId = String(dstBytes, StandardCharsets.UTF_8)
