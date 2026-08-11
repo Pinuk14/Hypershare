@@ -1,6 +1,7 @@
 package com.hypershare.ui.home
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -21,21 +22,26 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.hypershare.model.PeerMode
+import com.hypershare.ui.components.AmbientMeshGraphCanvas
 import com.hypershare.ui.components.BottomNavBar
+import com.hypershare.ui.components.GlassCard
 import com.hypershare.ui.components.NavTab
 import com.hypershare.ui.components.QrCodeCard
+import com.hypershare.ui.components.StatusChip
+import com.hypershare.ui.components.StatusChipState
 import com.hypershare.ui.theme.BackgroundBase
 import com.hypershare.ui.theme.ConnectedGreen
 import com.hypershare.ui.theme.ErrorRed
-import com.hypershare.ui.theme.SignalBlue
 import com.hypershare.ui.theme.TextPrimary
 
 @Composable
@@ -44,9 +50,22 @@ fun HomeScreen(
     onOpenLocalModeChats: () -> Unit,
     onOpenEmergencyModeChats: () -> Unit,
     onOpenAppSettings: () -> Unit,
-    onOpenAccountSettings: () -> Unit
+    onOpenAccountSettings: () -> Unit,
+    onOpenQrScanner: () -> Unit = {}
 ) {
     val uiState by viewModel.uiState.collectAsState()
+    val context = androidx.compose.ui.platform.LocalContext.current
+
+    val signedCardJson = remember(context) {
+        val username = com.hypershare.application.UserIdentityManager.getInstance(context).getUsername()
+        val identityManager = com.hypershare.identity.IdentityManager.getInstance(context)
+        val card = com.hypershare.identity.ContactCard.createSignedCard(identityManager, username)
+        card.toJson()
+    }
+
+    val totalUnreadCount = remember(context) {
+        com.hypershare.db.MessageRepository(context).getTotalUnreadMessageCount()
+    }
 
     Scaffold(
         containerColor = BackgroundBase,
@@ -64,82 +83,113 @@ fun HomeScreen(
                 },
                 onOpenAppSettings = onOpenAppSettings,
                 onOpenAccountSettings = onOpenAccountSettings,
-                onOpenHome = {}
+                onOpenHome = {},
+                onOpenQrScanner = onOpenQrScanner
             )
         }
     ) { padding ->
-        Column(
+        Box(
             modifier = Modifier
                 .fillMaxSize()
-                .padding(padding),
-            horizontalAlignment = Alignment.CenterHorizontally
+                .padding(padding)
         ) {
-            // Dedicated Status Bar Spacer Block
-            Spacer(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .windowInsetsTopHeight(WindowInsets.statusBars)
-                    .background(BackgroundBase)
-            )
+            // Ambient Live Mesh Topology Graph Background
+            AmbientMeshGraphCanvas(isDisasterMode = uiState.currentMode == PeerMode.MODE_2_MESH)
 
-            // Sleek HYPERSHARE Header Banner
-            Box(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 16.dp, vertical = 8.dp)
-                    .height(56.dp)
-                    .background(SignalBlue, RoundedCornerShape(16.dp)),
-                contentAlignment = Alignment.Center
+            Column(
+                modifier = Modifier.fillMaxSize(),
+                horizontalAlignment = Alignment.CenterHorizontally
             ) {
-                Text(
-                    text = "HYPERSHARE",
-                    color = TextPrimary,
-                    fontSize = 22.sp,
-                    fontWeight = FontWeight.Black,
-                    letterSpacing = 2.sp
+                // Status Bar Spacer Block
+                Spacer(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .windowInsetsTopHeight(WindowInsets.statusBars)
+                        .background(BackgroundBase)
                 )
+
+                // Glassmorphic HYPERSHARE Header Banner
+                GlassCard(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp, vertical = 8.dp),
+                    cornerRadius = 16.dp
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(56.dp),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(
+                                text = "HYPERSHARE",
+                                color = TextPrimary,
+                                fontSize = 22.sp,
+                                fontWeight = FontWeight.Black,
+                                letterSpacing = 2.sp
+                            )
+                            Spacer(modifier = Modifier.width(12.dp))
+                            StatusChip(
+                                state = if (uiState.currentMode == PeerMode.MODE_1_WIFI) StatusChipState.WIFI else StatusChipState.MESH
+                            )
+                        }
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(24.dp))
+
+                // LOCAL MODE vs EMERGENCY MODE Selector Cards
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 20.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    // LOCAL MODE Card (Green Tone)
+                    ModeCardButton(
+                        title = "LOCAL MODE",
+                        subtitle = "WiFi Local Network LAN",
+                        containerColor = ConnectedGreen,
+                        isSelected = uiState.currentMode == PeerMode.MODE_1_WIFI,
+                        unreadCount = totalUnreadCount,
+                        onClick = {
+                            viewModel.selectMode(PeerMode.MODE_1_WIFI)
+                            onOpenLocalModeChats()
+                        },
+                        modifier = Modifier.weight(1f)
+                    )
+
+                    Spacer(modifier = Modifier.width(12.dp))
+
+                    // EMERGENCY MODE Card (Red Tone)
+                    ModeCardButton(
+                        title = "EMERGENCY",
+                        subtitle = "Disaster Mesh Topology",
+                        containerColor = ErrorRed,
+                        isSelected = uiState.currentMode == PeerMode.MODE_2_MESH,
+                        onClick = {
+                            viewModel.selectMode(PeerMode.MODE_2_MESH)
+                            onOpenEmergencyModeChats()
+                        },
+                        modifier = Modifier.weight(1f)
+                    )
+                }
+
+                Spacer(modifier = Modifier.height(36.dp))
+
+                // Glassmorphic QR Share ID Card Container
+                GlassCard(
+                    modifier = Modifier.padding(horizontal = 24.dp),
+                    cornerRadius = 20.dp
+                ) {
+                    Box(modifier = Modifier.padding(16.dp)) {
+                        QrCodeCard(shareId = uiState.shareId, payload = signedCardJson)
+                    }
+                }
             }
-
-            Spacer(modifier = Modifier.height(24.dp))
-
-            // LOCAL MODE vs EMERGENCY MODE Selector Cards
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 24.dp),
-                horizontalArrangement = Arrangement.SpaceBetween
-            ) {
-                // LOCAL MODE Card (Green)
-                ModeCardButton(
-                    title = "LOCAL\nMODE",
-                    containerColor = ConnectedGreen,
-                    isSelected = uiState.currentMode == PeerMode.MODE_1_WIFI,
-                    onClick = {
-                        viewModel.selectMode(PeerMode.MODE_1_WIFI)
-                        onOpenLocalModeChats()
-                    },
-                    modifier = Modifier.weight(1f)
-                )
-
-                Spacer(modifier = Modifier.width(16.dp))
-
-                // EMERGENCY MODE Card (Red)
-                ModeCardButton(
-                    title = "EMERGENCY\nMODE",
-                    containerColor = ErrorRed,
-                    isSelected = uiState.currentMode == PeerMode.MODE_2_MESH,
-                    onClick = {
-                        viewModel.selectMode(PeerMode.MODE_2_MESH)
-                        onOpenEmergencyModeChats()
-                    },
-                    modifier = Modifier.weight(1f)
-                )
-            }
-
-            Spacer(modifier = Modifier.height(44.dp))
-
-            // Center QR Code "Share ID" Component
-            QrCodeCard(shareId = uiState.shareId)
         }
     }
 }
@@ -147,29 +197,67 @@ fun HomeScreen(
 @Composable
 fun ModeCardButton(
     title: String,
+    subtitle: String,
     containerColor: Color,
     isSelected: Boolean,
+    unreadCount: Int = 0,
     onClick: () -> Unit,
     modifier: Modifier = Modifier
 ) {
+    val shape = RoundedCornerShape(16.dp)
     Box(
         modifier = modifier
-            .height(110.dp)
+            .height(115.dp)
+            .clip(shape)
             .background(
-                color = if (isSelected) containerColor else containerColor.copy(alpha = 0.4f),
-                shape = RoundedCornerShape(24.dp)
+                color = if (isSelected) containerColor.copy(alpha = 0.22f) else Color(0x0DFFFFFF),
+                shape = shape
+            )
+            .border(
+                width = if (isSelected) 1.5.dp else 1.dp,
+                color = if (isSelected) containerColor else Color(0x14FFFFFF),
+                shape = shape
             )
             .clickable { onClick() }
-            .padding(16.dp),
+            .padding(14.dp),
         contentAlignment = Alignment.Center
     ) {
-        Text(
-            text = title,
-            color = TextPrimary,
-            fontWeight = FontWeight.Black,
-            fontSize = 16.sp,
-            textAlign = TextAlign.Center,
-            lineHeight = 20.sp
-        )
+        if (unreadCount > 0) {
+            Box(
+                modifier = Modifier
+                    .align(Alignment.TopEnd)
+                    .background(com.hypershare.ui.theme.SignalBlue, androidx.compose.foundation.shape.CircleShape)
+                    .padding(horizontal = 8.dp, vertical = 2.dp),
+                contentAlignment = Alignment.Center
+            ) {
+                Text(
+                    text = if (unreadCount > 99) "99+" else unreadCount.toString(),
+                    color = Color.White,
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 10.sp
+                )
+            }
+        }
+
+        Column(
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.Center
+        ) {
+            Text(
+                text = title,
+                color = if (isSelected) containerColor else TextPrimary,
+                fontWeight = FontWeight.Black,
+                fontSize = 15.sp,
+                textAlign = TextAlign.Center
+            )
+            Spacer(modifier = Modifier.height(4.dp))
+            Text(
+                text = subtitle,
+                color = Color(0xFF94A3B8),
+                fontSize = 10.sp,
+                textAlign = TextAlign.Center,
+                lineHeight = 13.sp
+            )
+        }
     }
 }
