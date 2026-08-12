@@ -181,7 +181,9 @@ class DiscoveryService : Service() {
                 isResolving.set(false)
                 val peerId = serviceInfo.serviceName
                 val host = serviceInfo.host
-                if (host != null) {
+                val myPeerId = UserIdentityManager.getInstance(this@DiscoveryService).getPeerId()
+
+                if (host != null && !isLocalDeviceAddress(host) && peerId != myPeerId && !peerId.startsWith(localServiceName)) {
                     val peer = ConnectedPeer(
                         peerId = peerId,
                         displayName = peerId.replace("HyperShare_", "").replace("_", " "),
@@ -224,7 +226,7 @@ class DiscoveryService : Service() {
                                     val senderIp = packet.address
 
                                     val myPeerId = UserIdentityManager.getInstance(this@DiscoveryService).getPeerId()
-                                    if (peerId != myPeerId) {
+                                    if (peerId != myPeerId && !isLocalDeviceAddress(senderIp)) {
                                         val peer = ConnectedPeer(
                                             peerId = peerId,
                                             displayName = displayName,
@@ -236,6 +238,9 @@ class DiscoveryService : Service() {
                                         )
 
                                         activePeers[peerId] = peer
+                                        serviceScope.launch(Dispatchers.IO) {
+                                            com.hypershare.db.MessageRepository(applicationContext).savePeer(peerId, displayName)
+                                        }
                                         _discoveryEventsFlow.emit(PeerDiscoveryEvent.PeerDiscovered(peer))
                                     }
                                 }
@@ -304,6 +309,25 @@ class DiscoveryService : Service() {
         super.onDestroy()
         stopDiscovery()
         try { multicastLock?.release() } catch (e: Exception) { }
+    }
+
+    private fun isLocalDeviceAddress(address: InetAddress?): Boolean {
+        if (address == null) return true
+        if (address.isLoopbackAddress || address.isAnyLocalAddress) return true
+        try {
+            val interfaces = NetworkInterface.getNetworkInterfaces() ?: return false
+            while (interfaces.hasMoreElements()) {
+                val iface = interfaces.nextElement()
+                val addrs = iface.inetAddresses
+                while (addrs.hasMoreElements()) {
+                    val addr = addrs.nextElement()
+                    if (addr.hostAddress == address.hostAddress) {
+                        return true
+                    }
+                }
+            }
+        } catch (_: Exception) { }
+        return false
     }
 
     companion object {

@@ -49,8 +49,15 @@ class LanSocketManager private constructor() {
     private val _incomingMessagesFlow = MutableSharedFlow<ChatMessageItem>(replay = 0, extraBufferCapacity = 64)
     val incomingMessagesFlow: SharedFlow<ChatMessageItem> = _incomingMessagesFlow.asSharedFlow()
 
+    data class AckEvent(val msgId: String, val status: MessageStatus)
+
     private val _ackEventsFlow = MutableSharedFlow<AckEvent>(replay = 0, extraBufferCapacity = 64)
     val ackEventsFlow: SharedFlow<AckEvent> = _ackEventsFlow.asSharedFlow()
+
+    data class ContactAcceptEvent(val peerId: String)
+
+    private val _contactAcceptEventsFlow = MutableSharedFlow<ContactAcceptEvent>(replay = 0, extraBufferCapacity = 64)
+    val contactAcceptEventsFlow: SharedFlow<ContactAcceptEvent> = _contactAcceptEventsFlow.asSharedFlow()
 
     @Volatile var activeChatPeerId: String? = null
 
@@ -109,7 +116,15 @@ class LanSocketManager private constructor() {
                 PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
             )
 
-            val cleanSenderName = senderPeerId.replace("HyperShare_", "").replace("_", " ")
+            val repository = com.hypershare.db.MessageRepository(context)
+            val dbDisplayName = repository.getPeerDisplayName(senderPeerId)
+            val cleanSenderName = if (!dbDisplayName.isNullOrEmpty()) {
+                dbDisplayName
+            } else if (senderPeerId.length > 16) {
+                senderPeerId.take(12)
+            } else {
+                senderPeerId.replace("HyperShare_", "").replace("_", " ")
+            }
 
             val notification = NotificationCompat.Builder(context, NOTIFICATION_CHANNEL_ID)
                 .setContentTitle("Message from $cleanSenderName")
@@ -260,6 +275,20 @@ class LanSocketManager private constructor() {
                                 }
                             }
                             _ackEventsFlow.emit(AckEvent(readMsgId, MessageStatus.READ))
+                        }
+                        PacketType.CONTACT_ACCEPT -> {
+                            Log.d(TAG, "CONTACT_ACCEPT received from peerId=$sourcePeerId")
+                            appContext?.let { ctx ->
+                                val repository = com.hypershare.db.MessageRepository(ctx)
+                                scope.launch(Dispatchers.IO) {
+                                    repository.markPeerAcceptanceReceived(sourcePeerId)
+                                }
+                            }
+                            _contactAcceptEventsFlow.emit(ContactAcceptEvent(sourcePeerId))
+                            val senderName = appContext?.let { ctx ->
+                                com.hypershare.db.MessageRepository(ctx).getPeerDisplayName(sourcePeerId)
+                            } ?: sourcePeerId.take(12)
+                            showIncomingNotification(sourcePeerId, "$senderName accepted & saved your contact! Tap to pair.")
                         }
                         else -> {}
                     }
@@ -434,6 +463,49 @@ class LanSocketManager private constructor() {
                 if (targetIp.isNotEmpty()) activeOutputStreams.remove(targetIp)
             } catch (e: Exception) {
                 Log.e(TAG, "Failed to send ${ackType.name} to $targetPeerId: ${e.message}", e)
+            }
+        }
+    }
+
+    fun sendContactAcceptPacket(
+        targetPeerId: String,
+        targetIp: String,
+        senderPeerId: String
+    ) {
+        scope.launch {
+            try {
+                val streamKey = when {
+                    activeOutputStreams.containsKey(targetPeerId) -> targetPeerId
+                    targetIp.isNotEmpty() && activeOutputStreams.containsKey(targetIp) -> targetIp
+                    else -> targetPeerId
+                }
+                var socket = activeSockets[streamKey] ?: if (targetIp.isNotEmpty()) {
+                    try { Socket(targetIp, DEFAULT_PORT) } catch (_: Exception) { null }
+                } else null
+
+                if (socket == null) return@launch
+                val out = activeOutputStreams.getOrPut(streamKey) {
+                    DataOutputStream(socket.getOutputStream())
+                }
+
+                val acceptPacket = Packet(
+                    header = PacketHeader(
+                        type = PacketType.CONTACT_ACCEPT,
+                        sequenceNumber = sequenceCounter.getAndIncrement(),
+                        sourcePeerId = senderPeerId,
+                        destinationPeerId = targetPeerId
+                    ),
+                    payload = "CONTACT_ACCEPT".toByteArray(StandardCharsets.UTF_8)
+                )
+                val bytes = PacketBuilder.serializePacket(acceptPacket)
+                synchronized(out) {
+                    out.writeInt(bytes.size)
+                    out.write(bytes)
+                    out.flush()
+                }
+                Log.d(TAG, "Sent CONTACT_ACCEPT to peerId=$targetPeerId ip=$targetIp")
+            } catch (e: Exception) {
+                Log.e(TAG, "Failed to send CONTACT_ACCEPT to $targetPeerId: ${e.message}")
             }
         }
     }
