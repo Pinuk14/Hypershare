@@ -154,9 +154,9 @@ fun SecurityPlaygroundScreen(
                         horizontalArrangement = Arrangement.spacedBy(8.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        StatusChip(status = com.hypershare.model.PeerStatus.CONNECTED)
-                        StatusChip(status = com.hypershare.model.PeerStatus.RELAYING, hopCount = 2)
-                        StatusChip(status = com.hypershare.model.PeerStatus.CONNECTING)
+                        com.hypershare.ui.components.StatusChip(state = com.hypershare.ui.components.StatusChipState.CONNECTED)
+                        com.hypershare.ui.components.StatusChip(state = com.hypershare.ui.components.StatusChipState.RELAYING, hopCount = 2)
+                        com.hypershare.ui.components.StatusChip(state = com.hypershare.ui.components.StatusChipState.CONNECTING)
                     }
                 }
             }

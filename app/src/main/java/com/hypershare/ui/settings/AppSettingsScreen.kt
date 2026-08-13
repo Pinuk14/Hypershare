@@ -14,38 +14,63 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.statusBars
 import androidx.compose.foundation.layout.windowInsetsTopHeight
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Switch
+import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.hypershare.ui.components.BottomNavBar
 import com.hypershare.ui.components.GlassCard
+import com.hypershare.ui.components.NavTab
 import com.hypershare.ui.theme.BackgroundBase
+import com.hypershare.ui.theme.ConnectedGreen
+import com.hypershare.ui.theme.MeshTeal
 import com.hypershare.ui.theme.SignalBlue
+import android.content.pm.ApplicationInfo
+import androidx.compose.ui.platform.LocalContext
 import com.hypershare.ui.theme.TextPrimary
 import com.hypershare.ui.theme.TextSecondary
 
 @Composable
 fun AppSettingsScreen(
     viewModel: AppSettingsViewModel,
-    onOpenSecurityPlayground: () -> Unit,
-    onBackClick: () -> Unit,
-    onHomeClick: () -> Unit
+    onHomeClick: () -> Unit,
+    onOpenAccountSettings: () -> Unit,
+    onOpenSecurityPlayground: () -> Unit
 ) {
     val uiState by viewModel.uiState.collectAsState()
+    val context = LocalContext.current
 
     Scaffold(
         containerColor = BackgroundBase,
-        contentWindowInsets = WindowInsets(0, 0, 0, 0)
+        contentWindowInsets = WindowInsets(0, 0, 0, 0),
+        bottomBar = {
+            BottomNavBar(
+                selectedTab = NavTab.SETTINGS,
+                onTabSelected = { tab ->
+                    when (tab) {
+                        NavTab.HOME -> onHomeClick()
+                        NavTab.ACCOUNT -> onOpenAccountSettings()
+                        NavTab.SETTINGS -> {}
+                        NavTab.PEERS -> onHomeClick()
+                    }
+                },
+                onOpenAppSettings = {},
+                onOpenAccountSettings = onOpenAccountSettings,
+                onOpenHome = onHomeClick
+            )
+        }
     ) { padding ->
         Column(
             modifier = Modifier
@@ -61,107 +86,166 @@ fun AppSettingsScreen(
                     .background(BackgroundBase)
             )
 
-            // Sleek Header Banner
-            Box(
+            // Header Banner
+            GlassCard(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(horizontal = 16.dp, vertical = 8.dp)
-                    .height(56.dp)
-                    .background(SignalBlue, RoundedCornerShape(16.dp)),
-                contentAlignment = Alignment.Center
+                    .padding(horizontal = 16.dp, vertical = 8.dp),
+                cornerRadius = 16.dp
+            ) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(56.dp),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text(
+                        text = "APP SETTINGS",
+                        color = TextPrimary,
+                        fontSize = 20.sp,
+                        fontWeight = FontWeight.Black,
+                        letterSpacing = 2.sp,
+                        modifier = Modifier.clickable { onHomeClick() }
+                    )
+                }
+            }
+
+            Spacer(modifier = Modifier.height(16.dp))
+
+            // OLED Dark Theme Enforcement Notice
+            GlassCard(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 20.dp),
+                cornerRadius = 16.dp
+            ) {
+                Column(
+                    modifier = Modifier.padding(16.dp)
+                ) {
+                    Text(
+                        text = "OLED DARK THEME",
+                        color = SignalBlue,
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 12.sp,
+                        letterSpacing = 1.sp
+                    )
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Text(
+                        text = "Battery-efficient deep space black (#0A0A0F) optimized for emergency use cases.",
+                        color = TextSecondary,
+                        fontSize = 12.sp
+                    )
+                }
+            }
+
+            Spacer(modifier = Modifier.height(16.dp))
+
+            // Auto-Switch Emergency Mode Setting
+            GlassCard(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 20.dp),
+                cornerRadius = 16.dp
+            ) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(16.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = "Auto-Emergency Mesh Mode",
+                            color = TextPrimary,
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 14.sp
+                        )
+                        Spacer(modifier = Modifier.height(2.dp))
+                        Text(
+                            text = "Auto-switch to Mode 2 when LAN drops",
+                            color = TextSecondary,
+                            fontSize = 11.sp
+                        )
+                    }
+
+                    Switch(
+                        checked = uiState.autoSwitchEmergencyMode,
+                        onCheckedChange = { viewModel.toggleAutoSwitch(it) },
+                        colors = SwitchDefaults.colors(
+                            checkedThumbColor = TextPrimary,
+                            checkedTrackColor = MeshTeal,
+                            uncheckedThumbColor = TextSecondary,
+                            uncheckedTrackColor = Color(0x33FFFFFF)
+                        )
+                    )
+                }
+            }
+
+            Spacer(modifier = Modifier.height(24.dp))
+
+            // Security Playground Action Button
+            Button(
+                onClick = { onOpenSecurityPlayground() },
+                colors = ButtonDefaults.buttonColors(containerColor = SignalBlue),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 20.dp)
+                    .height(48.dp)
             ) {
                 Text(
-                    text = "HYPERSHARE",
+                    text = "🔒 Launch Security & Protocol Playground",
                     color = TextPrimary,
-                    fontSize = 22.sp,
-                    fontWeight = FontWeight.Black,
-                    letterSpacing = 2.sp,
-                    modifier = Modifier.clickable { onHomeClick() }
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 13.sp,
+                    fontFamily = FontFamily.Monospace
                 )
             }
 
-            Column(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .padding(20.dp)
-            ) {
-                Text(
-                    text = "Application Settings",
-                    color = TextPrimary,
-                    fontWeight = FontWeight.Bold,
-                    fontSize = 20.sp,
-                    modifier = Modifier.padding(bottom = 16.dp)
-                )
+            // Developer Data Wipe Feature (Visible in testing/debug mode only)
+            val isDebuggable = (context.applicationInfo.flags and ApplicationInfo.FLAG_DEBUGGABLE) != 0
+            if (isDebuggable) {
+                Spacer(modifier = Modifier.height(24.dp))
 
-                GlassCard(modifier = Modifier.fillMaxWidth().padding(bottom = 12.dp)) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth().padding(16.dp),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
+                GlassCard(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 20.dp),
+                    cornerRadius = 16.dp
+                ) {
+                    Column(
+                        modifier = Modifier.padding(16.dp)
                     ) {
-                        Column {
-                            Text("Theme Preference", color = TextPrimary, fontWeight = FontWeight.Bold)
-                            Text(
-                                text = if (uiState.isDarkMode) "Dark OLED Mode (#0A0A0F)" else "Light Mode",
-                                color = TextSecondary,
-                                fontSize = 12.sp
-                            )
-                        }
-                        Switch(
-                            checked = uiState.isDarkMode,
-                            onCheckedChange = { viewModel.toggleDarkMode(it) }
-                        )
-                    }
-                }
-
-                GlassCard(modifier = Modifier.fillMaxWidth().padding(bottom = 12.dp)) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth().padding(16.dp),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text("Auto-Switch Emergency Mode", color = TextPrimary, fontWeight = FontWeight.Bold)
-                            Text(
-                                text = "Auto-enable Mode 2 mesh when WiFi LAN is lost",
-                                color = TextSecondary,
-                                fontSize = 11.sp
-                            )
-                        }
-                        Switch(
-                            checked = uiState.autoSwitchEmergencyMode,
-                            onCheckedChange = { viewModel.toggleAutoSwitch(it) }
-                        )
-                    }
-                }
-
-                GlassCard(modifier = Modifier.fillMaxWidth().padding(bottom = 12.dp)) {
-                    Column(modifier = Modifier.padding(16.dp)) {
-                        Text("Security & Developer Testing", color = SignalBlue, fontWeight = FontWeight.Bold)
                         Text(
-                            text = "Test ECDH key exchange, AES-256-GCM encryption, and packet serialization",
-                            color = TextSecondary,
-                            fontSize = 11.sp,
-                            modifier = Modifier.padding(vertical = 4.dp)
+                            text = "DEVELOPER OPTIONS (DEBUG ONLY)",
+                            color = Color(0xFFFF5555),
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 12.sp,
+                            letterSpacing = 1.sp
                         )
+                        Spacer(modifier = Modifier.height(6.dp))
+                        Text(
+                            text = "Simulate a fresh install by erasing all databases, preferences, keys, and cached files.",
+                            color = TextSecondary,
+                            fontSize = 12.sp
+                        )
+                        Spacer(modifier = Modifier.height(14.dp))
                         Button(
-                            onClick = onOpenSecurityPlayground,
-                            colors = ButtonDefaults.buttonColors(containerColor = SignalBlue),
-                            modifier = Modifier.padding(top = 4.dp)
+                            onClick = { viewModel.clearAllAppData(context) },
+                            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFFF3B30)),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(44.dp)
                         ) {
-                            Text("Open Security Playground")
+                            Text(
+                                text = "⚠️ Wipe All App Data & Restart",
+                                color = TextPrimary,
+                                fontWeight = FontWeight.Bold,
+                                fontSize = 13.sp
+                            )
                         }
                     }
                 }
-
-                Spacer(modifier = Modifier.weight(1f))
-
-                Text(
-                    text = "HyperShare v1.0 — Infraless Mesh Communication Engine",
-                    color = TextSecondary,
-                    fontSize = 11.sp,
-                    modifier = Modifier.align(Alignment.CenterHorizontally).padding(bottom = 8.dp)
-                )
             }
         }
     }
