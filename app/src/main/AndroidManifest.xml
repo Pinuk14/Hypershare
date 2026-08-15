@@ -68,6 +68,17 @@
             android:exported="false"
             android:foregroundServiceType="dataSync" />
 
+        <!-- Group Broadcast Receivers -->
+        <receiver
+            android:name=".ui.group.GroupInviteActionReceiver"
+            android:enabled="true"
+            android:exported="false" />
+
+        <receiver
+            android:name=".ui.group.GroupJoinRequestReceiver"
+            android:enabled="true"
+            android:exported="false" />
+
     </application>
 
 </manifest>

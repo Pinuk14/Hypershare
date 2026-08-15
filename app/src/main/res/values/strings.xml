@@ -1,3 +1,17 @@
 <resources>
     <string name="app_name">HyperShare</string>
+    <string name="camera_permission_title">Camera Permission Required</string>
+    <string name="camera_permission_rationale">HyperShare needs access to your camera to scan group invite QR codes.</string>
+    <string name="grant_permission">Grant Permission</string>
+    <string name="cancel">Cancel</string>
+    <string name="camera_permission_denied_snackbar">Camera permission required. Enable it in Settings.</string>
+    <string name="open_settings">Open Settings</string>
+    <string name="scan_qr_instruction">Point at a HyperShare group QR code</string>
+    <string name="qr_error_invalid">Not a valid HyperShare QR</string>
+    <string name="qr_error_expired">This invite has expired. Ask the admin to generate a new one.</string>
+    <string name="qr_error_signature">Invalid invite. This QR may have been tampered with.</string>
+    <string name="joined_via_qr">Joined via QR</string>
+    <string name="broadcast_invite">Broadcast Invite</string>
+    <string name="joined_via_broadcast">Joined via Broadcast</string>
+    <string name="joined_via_direct">Direct Invite</string>
 </resources>

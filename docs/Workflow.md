@@ -103,13 +103,13 @@
 ### Week 8 — Group Communication (Permanent & Temporary)
 **Goal:** Permanent and temporary multi-peer group messaging with admin-based access control.
 
-- [ ] Create Room `Group` and `GroupMessage` entities & `GroupRepository`
-- [ ] Implement Group Creation flow (Admin generates UUID `groupId`, constructs group, sends `GROUP_CREATE`)
-- [ ] Implement `GROUP_JOIN_ACK` handling and member list broadcast
-- [ ] Implement Admin Member Management (`GROUP_MEMBER_ADD`, `GROUP_MEMBER_REMOVE`, `GROUP_KICKED`)
-- [ ] Implement Direct Group Message Distribution (O(n) direct sends to `memberIds` with per-recipient `GROUP_MSG_ACK`)
-- [ ] Implement Temporary Group Lifecycle (In-memory connected member counter → `isActive=false` on dissolve)
-- [ ] Implement `GROUP_RESTORE` trigger when temporary group members reconnect on same network
+- [x] Create SQLite/Room `Group` and `GroupMessage` entities & `GroupRepository`
+- [x] Implement Group Creation flow (Admin generates UUID `groupId`, constructs group, sends `GROUP_CREATE`)
+- [x] Implement `GROUP_JOIN_ACK` handling and member list broadcast
+- [x] Implement Admin Member Management (`GROUP_MEMBER_ADD`, `GROUP_MEMBER_REMOVE`, `GROUP_KICKED`)
+- [x] Implement Direct Group Message Distribution (O(n) direct sends to `memberIds` with per-recipient `GROUP_MSG_ACK`)
+- [x] Implement Temporary Group Lifecycle (In-memory connected member counter → `isActive=false` on dissolve)
+- [x] Implement `GROUP_RESTORE` trigger when temporary group members reconnect on same network
 
 **Deliverable:** Admin can create, add/remove members, and chat in permanent and temporary groups.
 

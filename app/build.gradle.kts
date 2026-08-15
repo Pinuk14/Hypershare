@@ -53,6 +53,7 @@ dependencies {
   implementation(libs.androidx.lifecycle.runtime.ktx)
   implementation(libs.androidx.activity.compose)
   implementation(libs.bouncycastle.bcprov)
+  implementation(libs.kotlinx.serialization.json)
 
   // QR Code & CameraX
   implementation(libs.zxing.core)

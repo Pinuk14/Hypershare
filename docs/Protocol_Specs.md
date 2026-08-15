@@ -409,26 +409,26 @@ data class ContactCard(
 ## 11. Group Management & Messaging Protocol (Packet Types 0x20–0x28)
 
 ### 11.1 Group Data Model & Types
-- **PERMANENT**: Persistent group. Messages & active membership remain in local Room DB across app restarts.
-- **TEMPORARY**: Session-based group. Messages remain in local Room DB (`isActive=false` on dissolve); active group session dissolved when all members disconnect.
+- **PERMANENT**: Persistent group. Messages & active membership remain in local SQLite/Room DB across app restarts.
+- **TEMPORARY**: Session-based group. Messages remain in local DB (`isActive=false` on dissolve); active group session dissolved when all members disconnect.
 
-### 11.2 Group Packet Payloads
-- **`GROUP_CREATE` (`0x20`)**: Payload contains `groupId` (UUID), `groupName`, `adminUserId`, `groupType`, and initial `memberList` (JSON).
-- **`GROUP_JOIN_ACK` (`0x21`)**: Payload contains `groupId` and `joiningUserId`.
-- **`GROUP_MSG` (`0x22`)**: Payload contains `groupId`, `messageId`, `senderId`, `senderTimestamp`, and encrypted `content`.
-- **`GROUP_MSG_ACK` (`0x23`)**: Payload contains `groupId` and `messageId`.
-- **`GROUP_MEMBER_ADD` (`0x24`)**: Payload contains `groupId`, `newMemberUserId`, `displayName`, and `publicKey`.
-- **`GROUP_MEMBER_REMOVE` (`0x25`)**: Payload contains `groupId` and `removedUserId`. Admin signature required.
-- **`GROUP_KICKED` (`0x26`)**: Payload contains `groupId` and `reason`.
-- **`GROUP_DISSOLVE` (`0x27`)**: Payload contains `groupId` and `dissolveTimestamp`.
-- **`GROUP_RESTORE` (`0x28`)**: Payload contains `groupId` and `currentActiveMemberIds`. Triggered upon peer reconnection.
-
+### 11.2 Group Packet Payloads (Plaintext JSON/Binary)
+- **`GROUP_CREATE` (`0x20`)**: Payload contains `groupId` (UUID v4 string), `groupName` (UTF-8 string), `adminUserId` (32-byte hex string), `groupType` (`PERMANENT` or `TEMPORARY`), and initial `members` list `[{"userId", "displayName", "publicKey"}]`.
+- **`GROUP_JOIN_ACK` (`0x21`)**: Payload contains `groupId` and `joiningUserId`. Sent by a member acknowledging receipt and acceptance of `GROUP_CREATE`.
+- **`GROUP_MSG` (`0x22`)**: Payload contains `groupId`, `messageId` (UUID v4 string), `senderId`, `senderDisplayName`, `timestamp` (Int64 ms), and `text` (UTF-8 string content).
+- **`GROUP_MSG_ACK` (`0x23`)**: Payload contains `groupId`, `messageId`, and `ackUserId`.
+- **`GROUP_MEMBER_ADD` (`0x24`)**: Payload contains `groupId`, `newMember` object (`userId`, `displayName`, `publicKey`), and `adminUserId`.
+- **`GROUP_MEMBER_REMOVE` (`0x25`)**: Payload contains `groupId`, `removedUserId`, and `adminUserId`. Admin authorization required.
+- **`GROUP_KICKED` (`0x26`)**: Payload contains `groupId` and `reason` string (e.g. "Removed by admin").
+- **`GROUP_DISSOLVE` (`0x27`)**: Payload contains `groupId` and `dissolveTimestamp` (Int64 ms). Broadcast to all members to mark temporary or permanent group inactive.
+- **`GROUP_RESTORE` (`0x28`)**: Payload contains `groupId` and `activeMemberIds` array. Triggered upon peer reconnection on the same local network to synchronize active group state.
 
 ---
 
-## 10. Versioning & Compatibility
+## 12. Versioning & Compatibility
 
 - `VERSION` field in header is `0x01` for this specification.
 - On HELLO receipt: if receiver's app cannot support sender's version, send `HELLO_ACK` with `ACCEPT=0x00`, `REJECT_REASON=0x01`.
 - Minor additions (new packet types `0x14+`) are backward-compatible if old clients ignore unknown types.
 - Breaking changes require a `VERSION` bump to `0x02`.
+
