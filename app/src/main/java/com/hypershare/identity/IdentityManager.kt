@@ -77,6 +77,10 @@ class IdentityManager private constructor(context: Context) {
 
     fun getPublicKey(): ByteArray = publicKeyBytes.clone()
 
+    fun getPublicKeyHex(): String {
+        return publicKeyBytes.joinToString("") { "%02x".format(it) }
+    }
+
     fun getPublicKeyFingerprint(): String {
         val hash = computeBlake2b256(publicKeyBytes)
         val hex = hash.joinToString("") { "%02X".format(it) }

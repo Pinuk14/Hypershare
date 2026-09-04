@@ -60,11 +60,13 @@ class LanSocketManager private constructor() {
     val contactAcceptEventsFlow: SharedFlow<ContactAcceptEvent> = _contactAcceptEventsFlow.asSharedFlow()
 
     @Volatile var activeChatPeerId: String? = null
+    @Volatile var activeGroupChatId: String? = null
 
     companion object {
         const val DEFAULT_PORT = 47200
         private const val TAG = "LanSocketManager"
         private const val NOTIFICATION_CHANNEL_ID = "hypershare_chat_messages"
+        private const val GROUP_NOTIFICATION_CHANNEL_ID = "hypershare_group_messages"
 
         @Volatile private var INSTANCE: LanSocketManager? = null
 
@@ -92,6 +94,77 @@ class LanSocketManager private constructor() {
                 enableVibration(true)
             }
             manager?.createNotificationChannel(channel)
+
+            val groupChannel = NotificationChannel(
+                GROUP_NOTIFICATION_CHANNEL_ID,
+                "HyperShare Group Messages",
+                NotificationManager.IMPORTANCE_HIGH
+            ).apply {
+                description = "Notifications for incoming group chat messages"
+                enableVibration(true)
+            }
+            manager?.createNotificationChannel(groupChannel)
+        }
+    }
+
+    /**
+     * Posts a status bar notification for an incoming group message.
+     */
+    fun postGroupMessageNotification(groupId: String, groupName: String, senderDisplayName: String, text: String) {
+        if (activeGroupChatId == groupId) return
+        val context = appContext ?: return
+        try {
+            val manager = context.getSystemService(Context.NOTIFICATION_SERVICE) as? NotificationManager ?: return
+            val intent = Intent(context, com.hypershare.MainActivity::class.java).apply {
+                flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP
+                putExtra("OPEN_GROUP_ID", groupId)
+            }
+            val pendingIntent = PendingIntent.getActivity(
+                context, groupId.hashCode(), intent,
+                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+            )
+            val notification = NotificationCompat.Builder(context, GROUP_NOTIFICATION_CHANNEL_ID)
+                .setContentTitle(groupName)
+                .setContentText("$senderDisplayName: $text")
+                .setSmallIcon(android.R.drawable.ic_dialog_info)
+                .setAutoCancel(true)
+                .setPriority(NotificationCompat.PRIORITY_HIGH)
+                .setDefaults(NotificationCompat.DEFAULT_ALL)
+                .setContentIntent(pendingIntent)
+                .build()
+            manager.notify(groupId.hashCode(), notification)
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to post group notification: ${e.message}", e)
+        }
+    }
+
+    /**
+     * Posts a status bar notification for a broadcast group invite when app is in background.
+     */
+    fun postBroadcastInviteNotification(groupId: String, groupName: String, adminUserId: String, adminDisplayName: String) {
+        val context = appContext ?: return
+        try {
+            val manager = context.getSystemService(Context.NOTIFICATION_SERVICE) as? NotificationManager ?: return
+            val intent = Intent(context, com.hypershare.MainActivity::class.java).apply {
+                flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP
+                putExtra("OPEN_GROUP_ID", groupId)
+            }
+            val pendingIntent = PendingIntent.getActivity(
+                context, ("invite_$groupId").hashCode(), intent,
+                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+            )
+            val notification = NotificationCompat.Builder(context, GROUP_NOTIFICATION_CHANNEL_ID)
+                .setContentTitle("Group Invite: $groupName")
+                .setContentText("$adminDisplayName invited you to join")
+                .setSmallIcon(android.R.drawable.ic_dialog_info)
+                .setAutoCancel(true)
+                .setPriority(NotificationCompat.PRIORITY_HIGH)
+                .setDefaults(NotificationCompat.DEFAULT_ALL)
+                .setContentIntent(pendingIntent)
+                .build()
+            manager.notify(("invite_$groupId").hashCode(), notification)
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to post broadcast invite notification: ${e.message}", e)
         }
     }
 

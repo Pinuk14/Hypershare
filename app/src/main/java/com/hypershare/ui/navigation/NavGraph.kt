@@ -44,6 +44,10 @@ import com.hypershare.ui.stream.StreamPlayerScreen
 import com.hypershare.ui.stream.StreamPlayerViewModel
 import com.hypershare.ui.testing.SecurityPlaygroundScreen
 import com.hypershare.ui.testing.SecurityPlaygroundViewModel
+import com.hypershare.ui.group.GroupListScreen
+import com.hypershare.ui.group.GroupListViewModel
+import com.hypershare.ui.group.GroupChatScreen
+import com.hypershare.ui.group.GroupChatViewModel
 import kotlinx.serialization.Serializable
 
 @Serializable data object HomeNavKey : NavKey
@@ -57,6 +61,8 @@ import kotlinx.serialization.Serializable
 @Serializable data object RoutingDebugNavKey : NavKey
 @Serializable data object SecurityPlaygroundNavKey : NavKey
 @Serializable data object QrScannerNavKey : NavKey
+@Serializable data object GroupListNavKey : NavKey
+@Serializable data class GroupChatNavKey(val groupId: String) : NavKey
 
 @Composable
 fun HyperShareNavGraph(
@@ -241,6 +247,26 @@ fun HyperShareNavGraph(
             entry<SecurityPlaygroundNavKey> {
                 val vm: SecurityPlaygroundViewModel = viewModel()
                 SecurityPlaygroundScreen(
+                    viewModel = vm,
+                    onBackClick = { backStack.removeLastOrNull() }
+                )
+            }
+            entry<GroupListNavKey> {
+                val vm: GroupListViewModel = viewModel()
+                GroupListScreen(
+                    viewModel = vm,
+                    onGroupClick = { groupId ->
+                        backStack.add(GroupChatNavKey(groupId = groupId))
+                    },
+                    onBackClick = { backStack.removeLastOrNull() }
+                )
+            }
+            entry<GroupChatNavKey> { key ->
+                val vm: GroupChatViewModel = viewModel()
+                LaunchedEffect(key) {
+                    vm.loadGroup(key.groupId)
+                }
+                GroupChatScreen(
                     viewModel = vm,
                     onBackClick = { backStack.removeLastOrNull() }
                 )

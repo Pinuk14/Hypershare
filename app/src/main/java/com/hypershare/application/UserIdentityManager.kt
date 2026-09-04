@@ -43,6 +43,10 @@ class UserIdentityManager private constructor(context: Context) {
         return identityManager.getPublicKeyFingerprint()
     }
 
+    fun getPublicKeyHex(): String {
+        return identityManager.getPublicKeyHex()
+    }
+
     companion object {
         private const val PREFS_NAME = "hypershare_identity_prefs"
         private const val KEY_USERNAME = "username"

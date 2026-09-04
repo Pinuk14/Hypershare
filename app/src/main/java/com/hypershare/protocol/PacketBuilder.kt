@@ -38,6 +38,26 @@ object PacketBuilder {
         return Packet(header, chunkPayload)
     }
 
+    /**
+     * Constructs a group communication packet with a JSON-serialized payload.
+     * Used for all GROUP_* packet types (0x20–0x29).
+     */
+    fun buildGroupPacket(
+        sourcePeerId: String,
+        destPeerId: String,
+        seqNum: Int,
+        type: PacketType,
+        jsonPayload: String
+    ): Packet {
+        val header = PacketHeader(
+            type = type,
+            sequenceNumber = seqNum,
+            sourcePeerId = sourcePeerId,
+            destinationPeerId = destPeerId
+        )
+        return Packet(header, jsonPayload.toByteArray(StandardCharsets.UTF_8))
+    }
+
     fun serializePacket(packet: Packet): ByteArray {
         val srcBytes = packet.header.sourcePeerId.toByteArray(StandardCharsets.UTF_8)
         val dstBytes = packet.header.destinationPeerId.toByteArray(StandardCharsets.UTF_8)

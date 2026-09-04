@@ -1,6 +1,7 @@
 package com.hypershare.application
 
 import com.hypershare.model.ConnectedPeer
+import com.hypershare.model.JoinMethod
 import com.hypershare.model.PeerMode
 import com.hypershare.model.SessionEvent
 import kotlinx.coroutines.flow.MutableSharedFlow
@@ -9,6 +10,17 @@ import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
+
+/**
+ * Represents an incoming group invite banner shown in the foreground UI.
+ */
+data class InviteBannerState(
+    val groupId: String,
+    val groupName: String,
+    val adminUserId: String,
+    val adminDisplayName: String,
+    val joinMethod: JoinMethod = JoinMethod.BROADCAST
+)
 
 class SessionManager {
 
@@ -20,6 +32,9 @@ class SessionManager {
 
     private val _sessionEvents = MutableSharedFlow<SessionEvent>()
     val sessionEvents: SharedFlow<SessionEvent> = _sessionEvents.asSharedFlow()
+
+    private val _inviteBannerFlow = MutableSharedFlow<InviteBannerState>(extraBufferCapacity = 8)
+    val inviteBannerFlow: SharedFlow<InviteBannerState> = _inviteBannerFlow.asSharedFlow()
 
     fun addDiscoveredPeer(peer: ConnectedPeer) {
         val currentList = _connectedPeers.value.toMutableList()
@@ -42,4 +57,9 @@ class SessionManager {
         _currentMode.value = newMode
         _sessionEvents.tryEmit(SessionEvent.ModeChanged(newMode))
     }
+
+    fun emitInviteBanner(banner: InviteBannerState) {
+        _inviteBannerFlow.tryEmit(banner)
+    }
 }
+
