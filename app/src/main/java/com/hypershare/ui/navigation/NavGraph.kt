@@ -4,6 +4,9 @@ import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
 import android.content.ServiceConnection
+import android.content.pm.PackageManager
+import android.Manifest
+import android.os.Build
 import android.os.IBinder
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
@@ -14,6 +17,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.platform.LocalContext
 import androidx.lifecycle.viewmodel.compose.viewModel
+import androidx.core.content.ContextCompat
 import androidx.navigation3.runtime.NavKey
 import androidx.navigation3.runtime.entryProvider
 import androidx.navigation3.runtime.rememberNavBackStack
@@ -23,6 +27,7 @@ import com.hypershare.model.PeerDiscoveryEvent
 import com.hypershare.model.PeerMode
 import com.hypershare.service.DiscoveryService
 import com.hypershare.service.LanSocketManager
+import com.hypershare.service.MeshNetworkService
 import com.hypershare.ui.chat.ChatScreen
 import com.hypershare.ui.chat.ChatViewModel
 import com.hypershare.ui.components.NavTab
@@ -51,7 +56,7 @@ import com.hypershare.ui.group.GroupChatViewModel
 import kotlinx.serialization.Serializable
 
 @Serializable data object HomeNavKey : NavKey
-@Serializable data object PeerListNavKey : NavKey
+@Serializable data class PeerListNavKey(val mode: PeerMode = PeerMode.MODE_1_WIFI) : NavKey
 @Serializable data class ChatNavKey(val peerId: String, val peerName: String = "", val peerIp: String = "", val peerPort: Int = 47200) : NavKey
 @Serializable data object AccountSettingsNavKey : NavKey
 @Serializable data object AppSettingsNavKey : NavKey
@@ -67,18 +72,43 @@ import kotlinx.serialization.Serializable
 @Composable
 fun HyperShareNavGraph(
     targetPeerId: String? = null,
+    networkPermissionsGranted: Boolean = false,
     onPeerNavigated: () -> Unit = {}
 ) {
     val context = LocalContext.current
     val backStack = rememberNavBackStack(HomeNavKey)
 
     var discoveryService by remember { mutableStateOf<DiscoveryService?>(null) }
+    var meshNetworkService by remember { mutableStateOf<MeshNetworkService?>(null) }
 
     // Singleton LanSocketManager — same instance across all recompositions
     val lanSocketManager = remember { LanSocketManager.getInstance().also { it.startServer() } }
 
     val myPeerId = remember {
         UserIdentityManager.getInstance(context).getPeerId()
+    }
+
+    fun hasRequiredNetworkPermission(): Boolean {
+        val permission = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            Manifest.permission.NEARBY_WIFI_DEVICES
+        } else {
+            Manifest.permission.ACCESS_FINE_LOCATION
+        }
+        return ContextCompat.checkSelfPermission(context, permission) == PackageManager.PERMISSION_GRANTED
+    }
+
+    fun activateNetworkMode(mode: PeerMode) {
+        if (!networkPermissionsGranted || !hasRequiredNetworkPermission()) return
+        ContextCompat.startForegroundService(
+            context,
+            Intent(context, DiscoveryService::class.java)
+                .putExtra(MeshNetworkService.EXTRA_MODE, mode.name)
+        )
+        ContextCompat.startForegroundService(
+            context,
+            Intent(context, MeshNetworkService::class.java)
+                .putExtra(MeshNetworkService.EXTRA_MODE, mode.name)
+        )
     }
 
     // Direct deep-link navigation to target chatroom when user taps notification
@@ -96,7 +126,10 @@ fun HyperShareNavGraph(
     }
 
 
-    DisposableEffect(context) {
+    DisposableEffect(context, networkPermissionsGranted) {
+        if (!networkPermissionsGranted) {
+            onDispose { }
+        } else {
         val connection = object : ServiceConnection {
             override fun onServiceConnected(name: ComponentName?, service: IBinder?) {
                 val binder = service as? DiscoveryService.LocalBinder
@@ -112,6 +145,30 @@ fun HyperShareNavGraph(
         onDispose {
             try { context.unbindService(connection) } catch (e: Exception) { }
         }
+        }
+    }
+
+    DisposableEffect(context, networkPermissionsGranted) {
+        if (!networkPermissionsGranted) {
+            onDispose { }
+        } else {
+        val connection = object : ServiceConnection {
+            override fun onServiceConnected(name: ComponentName?, service: IBinder?) {
+                val binder = service as? MeshNetworkService.LocalBinder
+                meshNetworkService = binder?.getService()
+            }
+
+            override fun onServiceDisconnected(name: ComponentName?) {
+                meshNetworkService = null
+            }
+        }
+        val intent = Intent(context, MeshNetworkService::class.java)
+        context.bindService(intent, connection, Context.BIND_AUTO_CREATE)
+
+        onDispose {
+            try { context.unbindService(connection) } catch (e: Exception) { }
+        }
+        }
     }
 
     NavDisplay(
@@ -120,33 +177,60 @@ fun HyperShareNavGraph(
         entryProvider = entryProvider {
             entry<HomeNavKey> {
                 val vm: HomeViewModel = viewModel()
-                val peerVm: PeerListViewModel = viewModel()
                 HomeScreen(
                     viewModel = vm,
                     onOpenLocalModeChats = {
-                        peerVm.setMode(PeerMode.MODE_1_WIFI)
-                        backStack.add(PeerListNavKey)
+                        activateNetworkMode(PeerMode.MODE_1_WIFI)
+                        backStack.add(PeerListNavKey(PeerMode.MODE_1_WIFI))
                     },
                     onOpenEmergencyModeChats = {
-                        peerVm.setMode(PeerMode.MODE_2_MESH)
-                        backStack.add(PeerListNavKey)
+                        activateNetworkMode(PeerMode.MODE_2_MESH)
+                        backStack.add(PeerListNavKey(PeerMode.MODE_2_MESH))
                     },
                     onOpenAppSettings = { backStack.add(AppSettingsNavKey) },
                     onOpenAccountSettings = { backStack.add(AccountSettingsNavKey) },
                     onOpenQrScanner = { backStack.add(QrScannerNavKey) }
                 )
             }
-            entry<PeerListNavKey> {
+            entry<PeerListNavKey> { key ->
                 val vm: PeerListViewModel = viewModel()
 
-                // Seed list with already-active peers when screen opens
-                LaunchedEffect(discoveryService) {
-                    discoveryService?.getActivePeers()?.forEach { peer ->
-                        vm.handleDiscoveryEvent(PeerDiscoveryEvent.PeerDiscovered(peer))
+                LaunchedEffect(key.mode) {
+                    vm.setMode(key.mode)
+                }
+
+                // LAN peers remain sourced from the existing discovery service.
+                LaunchedEffect(key.mode, discoveryService) {
+                    if (key.mode == PeerMode.MODE_1_WIFI) {
+                        discoveryService?.getActivePeers()?.forEach { peer ->
+                            vm.handleDiscoveryEvent(PeerDiscoveryEvent.PeerDiscovered(peer))
+                        }
+                        discoveryService?.discoveryEventsFlow?.collect { event ->
+                            vm.handleDiscoveryEvent(event)
+                        }
                     }
-                    // Then collect live events (replay=4 on the flow also helps catch recent ones)
-                    discoveryService?.discoveryEventsFlow?.collect { event ->
-                        vm.handleDiscoveryEvent(event)
+                }
+
+                // Wi-Fi Direct peers and group state come from the controller only in P2P mode.
+                LaunchedEffect(key.mode, meshNetworkService) {
+                    if (key.mode == PeerMode.MODE_2_MESH) {
+                        meshNetworkService?.wifiDirectController?.discoveredPeers?.collect { peers ->
+                            vm.updateWifiDirectPeers(peers)
+                        }
+                    }
+                }
+                LaunchedEffect(key.mode, meshNetworkService) {
+                    if (key.mode == PeerMode.MODE_2_MESH) {
+                        meshNetworkService?.wifiDirectController?.connectionState?.collect { state ->
+                            vm.updateWifiDirectConnection(state)
+                        }
+                    }
+                }
+                LaunchedEffect(key.mode, meshNetworkService) {
+                    if (key.mode == PeerMode.MODE_2_MESH) {
+                        meshNetworkService?.wifiDirectController?.peerIds?.collect { peerIds ->
+                            vm.updateWifiDirectPeerIds(peerIds)
+                        }
                     }
                 }
 
@@ -159,10 +243,29 @@ fun HyperShareNavGraph(
                         val name = peer?.displayName ?: ""
                         backStack.add(ChatNavKey(peerId = peerId, peerName = name, peerIp = ip, peerPort = peer?.port ?: 47200))
                     },
+                    onWifiDirectPeerClick = { peer ->
+                        val peerId = vm.uiState.value.wifiDirectPeerIds[peer.deviceAddress]
+                        val connection = vm.uiState.value.wifiDirectConnection
+                        if (connection.isConnected && !peerId.isNullOrEmpty()) {
+                            val targetIp = if (connection.isGroupOwner) "" else connection.groupOwnerIpAddress.orEmpty()
+                            backStack.add(
+                                ChatNavKey(
+                                    peerId = peerId,
+                                    peerName = peer.deviceName.ifBlank { peer.deviceAddress },
+                                    peerIp = targetIp
+                                )
+                            )
+                        } else {
+                            meshNetworkService?.wifiDirectController?.connect(peer)
+                        }
+                    },
                     onHomeClick = { backStack.add(HomeNavKey) },
                     onOpenAppSettings = { backStack.add(AppSettingsNavKey) },
                     onOpenAccountSettings = { backStack.add(AccountSettingsNavKey) },
-                    onRefreshDiscovery = { discoveryService?.refreshDiscovery() }
+                    onRefreshDiscovery = { discoveryService?.refreshDiscovery() },
+                    onRefreshWifiDirectDiscovery = {
+                        meshNetworkService?.wifiDirectController?.startPeerDiscovery()
+                    }
                 )
             }
             entry<ChatNavKey> { key ->

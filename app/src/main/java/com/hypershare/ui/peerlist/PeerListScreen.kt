@@ -37,6 +37,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import android.net.wifi.p2p.WifiP2pDevice
 import com.hypershare.model.ConnectedPeer
 import com.hypershare.model.PeerMode
 import com.hypershare.model.PeerStatus
@@ -63,29 +64,42 @@ fun PeerListScreen(
     onHomeClick: () -> Unit,
     onOpenAppSettings: () -> Unit,
     onOpenAccountSettings: () -> Unit,
-    onRefreshDiscovery: (() -> Unit)? = null
+    onRefreshDiscovery: (() -> Unit)? = null,
+    onWifiDirectPeerClick: (WifiP2pDevice) -> Unit = {},
+    onRefreshWifiDirectDiscovery: (() -> Unit)? = null
 ) {
     val uiState by viewModel.uiState.collectAsState()
     val pullToRefreshState = rememberPullToRefreshState()
     val context = androidx.compose.ui.platform.LocalContext.current
 
-    // Discovered mDNS/UDP LAN peers or fallback mock peers
-    val displayPeers = if (uiState.peers.isNotEmpty()) {
+    val isWifiDirectMode = uiState.currentMode == PeerMode.MODE_2_MESH
+    val wifiDirectPeersById = remember(uiState.wifiDirectPeers, uiState.wifiDirectPeerIds) {
+        uiState.wifiDirectPeers.associateBy { device ->
+            uiState.wifiDirectPeerIds[device.deviceAddress] ?: device.deviceAddress
+        }
+    }
+
+    // P2P mode deliberately shows only real Wi-Fi Direct devices, never demo peers.
+    val displayPeers = if (isWifiDirectMode) {
+        uiState.wifiDirectPeers.map { device ->
+            ConnectedPeer(
+                peerId = uiState.wifiDirectPeerIds[device.deviceAddress] ?: device.deviceAddress,
+                displayName = device.deviceName.ifBlank { device.deviceAddress },
+                status = when {
+                    uiState.wifiDirectConnection.isConnected -> PeerStatus.CONNECTED
+                    uiState.wifiDirectConnection.isConnecting -> PeerStatus.CONNECTING
+                    else -> PeerStatus.DISCOVERED
+                },
+                mode = PeerMode.MODE_2_MESH
+            )
+        }
+    } else if (uiState.peers.isNotEmpty()) {
         uiState.peers
     } else if (uiState.showDemoPeers) {
-        if (uiState.currentMode == PeerMode.MODE_1_WIFI) {
             listOf(
                 ConnectedPeer("peer-1", "Device Alpha (LAN)", status = PeerStatus.CONNECTED, mode = PeerMode.MODE_1_WIFI),
                 ConnectedPeer("peer-2", "Device Beta (LAN)", status = PeerStatus.DISCOVERED, mode = PeerMode.MODE_1_WIFI)
             )
-        } else {
-            listOf(
-                ConnectedPeer("peer-1", "Device Alpha (LAN)", status = PeerStatus.CONNECTED, mode = PeerMode.MODE_1_WIFI),
-                ConnectedPeer("peer-2", "Device Beta (LAN)", status = PeerStatus.DISCOVERED, mode = PeerMode.MODE_1_WIFI),
-                ConnectedPeer("peer-3", "Relay Node Gamma", status = PeerStatus.RELAYING, hopCount = 2, mode = PeerMode.MODE_2_MESH),
-                ConnectedPeer("peer-4", "Disaster Node Delta", status = PeerStatus.CONNECTING, mode = PeerMode.MODE_2_MESH)
-            )
-        }
     } else {
         emptyList()
     }
@@ -186,7 +200,9 @@ fun PeerListScreen(
                                 .size(38.dp)
                                 .background(Color(0x22FFFFFF), CircleShape)
                                 .clickable {
-                                    viewModel.refreshPeers(onRefreshDiscovery)
+                                    viewModel.refreshPeers(
+                                        if (isWifiDirectMode) onRefreshWifiDirectDiscovery else onRefreshDiscovery
+                                    )
                                 },
                             contentAlignment = Alignment.Center
                         ) {
@@ -203,42 +219,62 @@ fun PeerListScreen(
                 Spacer(modifier = Modifier.height(4.dp))
 
                 Text(
-                    text = if (uiState.currentMode == PeerMode.MODE_1_WIFI) "● LOCAL NETWORK (mDNS LAN)" else "▲ EMERGENCY MESH TOPOLOGY",
-                    color = if (uiState.currentMode == PeerMode.MODE_1_WIFI) ConnectedGreen else ErrorRed,
+                    text = if (!isWifiDirectMode) "● LOCAL NETWORK (mDNS LAN)" else "▲ WI-FI DIRECT PEER DISCOVERY",
+                    color = if (!isWifiDirectMode) ConnectedGreen else ErrorRed,
                     fontWeight = FontWeight.Bold,
                     fontSize = 11.sp,
                     fontFamily = FontFamily.Monospace,
                     modifier = Modifier.padding(bottom = 8.dp)
                 )
 
-                // Interactive Bar to Show / Clear Demo Chat Rooms
-                GlassCard(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 16.dp, vertical = 4.dp)
-                        .clickable { viewModel.toggleShowDemoPeers() },
-                    cornerRadius = 12.dp
-                ) {
-                    Row(
+                if (isWifiDirectMode) {
+                    val connection = uiState.wifiDirectConnection
+                    val connectionText = when {
+                        connection.isConnected -> {
+                            val role = if (connection.isGroupOwner) "GROUP OWNER" else "CLIENT"
+                            "● P2P CONNECTED • $role • GO ${connection.groupOwnerIpAddress ?: "pending"}"
+                        }
+                        connection.isConnecting -> "◌ CONNECTING TO WI-FI DIRECT DEVICE"
+                        connection.isDiscovering -> "◌ SCANNING FOR WI-FI DIRECT DEVICES"
+                        else -> "○ WI-FI DIRECT READY"
+                    }
+                    Text(
+                        text = connectionText,
+                        color = if (connection.isConnected) ConnectedGreen else TextSecondary,
+                        fontFamily = FontFamily.Monospace,
+                        fontSize = 11.sp,
+                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)
+                    )
+                } else {
+                    // Demo peers remain limited to the existing LAN view.
+                    GlassCard(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .padding(horizontal = 14.dp, vertical = 8.dp),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
+                            .padding(horizontal = 16.dp, vertical = 4.dp)
+                            .clickable { viewModel.toggleShowDemoPeers() },
+                        cornerRadius = 12.dp
                     ) {
-                        Text(
-                            text = if (uiState.showDemoPeers) "● Demo Chat Rooms (Visible)" else "○ Real LAN Peers Only",
-                            color = TextSecondary,
-                            fontSize = 11.sp,
-                            fontFamily = FontFamily.Monospace
-                        )
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 14.dp, vertical = 8.dp),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(
+                                text = if (uiState.showDemoPeers) "● Demo Chat Rooms (Visible)" else "○ Real LAN Peers Only",
+                                color = TextSecondary,
+                                fontSize = 11.sp,
+                                fontFamily = FontFamily.Monospace
+                            )
 
-                        Text(
-                            text = if (uiState.showDemoPeers) "🗑 Clear Demo Rooms" else "↺ Restore Demo Rooms",
-                            color = SignalBlue,
-                            fontWeight = FontWeight.Bold,
-                            fontSize = 11.sp
-                        )
+                            Text(
+                                text = if (uiState.showDemoPeers) "🗑 Clear Demo Rooms" else "↺ Restore Demo Rooms",
+                                color = SignalBlue,
+                                fontWeight = FontWeight.Bold,
+                                fontSize = 11.sp
+                            )
+                        }
                     }
                 }
 
@@ -247,7 +283,11 @@ fun PeerListScreen(
                 // Pull-to-Refresh Container for Swipe Down Gesture
                 PullToRefreshBox(
                     isRefreshing = uiState.isRefreshing,
-                    onRefresh = { viewModel.refreshPeers(onRefreshDiscovery) },
+                    onRefresh = {
+                        viewModel.refreshPeers(
+                            if (isWifiDirectMode) onRefreshWifiDirectDiscovery else onRefreshDiscovery
+                        )
+                    },
                     state = pullToRefreshState,
                     modifier = Modifier
                         .weight(1f)
@@ -271,7 +311,11 @@ fun PeerListScreen(
                                 )
                                 Spacer(modifier = Modifier.height(4.dp))
                                 Text(
-                                    text = "Pull down to scan network or tap '↻' above.\nEnsure both devices share the same WiFi network.",
+                                    text = if (isWifiDirectMode) {
+                                        "Pull down to scan or tap '↻' above.\nEnable Wi-Fi Direct on both nearby devices."
+                                    } else {
+                                        "Pull down to scan network or tap '↻' above.\nEnsure both devices share the same WiFi network."
+                                    },
                                     color = TextSecondary,
                                     fontSize = 12.sp,
                                     textAlign = TextAlign.Center
@@ -286,7 +330,13 @@ fun PeerListScreen(
                             verticalArrangement = Arrangement.spacedBy(10.dp)
                         ) {
                             items(displayPeers, key = { it.peerId }) { peer ->
-                                PeerGlassListItem(peer = peer, onClick = { onPeerClick(peer.peerId) })
+                                PeerGlassListItem(peer = peer, onClick = {
+                                    if (isWifiDirectMode) {
+                                        wifiDirectPeersById[peer.peerId]?.let(onWifiDirectPeerClick)
+                                    } else {
+                                        onPeerClick(peer.peerId)
+                                    }
+                                })
                             }
                         }
                     }
@@ -370,7 +420,12 @@ fun PeerGlassListItem(
                     val prefix = if (lastMessage.isOutgoing) "You: " else ""
                     prefix + lastMessage.text
                 } else {
-                    if (isTrusted) "Verified Contact • $subtext" else "Discovered LAN • $subtext"
+                    if (isTrusted) {
+                        "Verified Contact • $subtext"
+                    } else {
+                        val network = if (peer.mode == PeerMode.MODE_2_MESH) "Wi-Fi Direct" else "LAN"
+                        "Discovered $network • $subtext"
+                    }
                 }
             }
 

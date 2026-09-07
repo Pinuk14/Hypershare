@@ -74,7 +74,19 @@ class DiscoveryService : Service() {
 
         localServiceName = "HyperShare_${UserIdentityManager.getInstance(this).getUsername().replace(" ", "_")}"
         startForegroundNotification()
-        startDiscovery(PeerMode.MODE_1_WIFI)
+    }
+
+    override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        val mode = intent?.getStringExtra(MeshNetworkService.EXTRA_MODE)
+            ?.let { runCatching { PeerMode.valueOf(it) }.getOrNull() }
+            ?: PeerMode.MODE_1_WIFI
+        if (mode == PeerMode.MODE_1_WIFI) {
+            startDiscovery(mode)
+        } else {
+            stopDiscovery()
+            activePeers.clear()
+        }
+        return START_STICKY
     }
 
     fun startDiscovery(mode: PeerMode = PeerMode.MODE_1_WIFI) {

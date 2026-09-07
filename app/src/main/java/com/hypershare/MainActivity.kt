@@ -2,6 +2,7 @@ package com.hypershare
 
 import android.Manifest
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
 import androidx.activity.ComponentActivity
@@ -25,6 +26,8 @@ class MainActivity : ComponentActivity() {
 
     private val _targetPeerIdFlow = MutableStateFlow<String?>(null)
     val targetPeerIdFlow = _targetPeerIdFlow.asStateFlow()
+    private val _networkPermissionsGranted = MutableStateFlow(false)
+    private var networkServicesStarted = false
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -32,22 +35,16 @@ class MainActivity : ComponentActivity() {
         enableEdgeToEdge()
         handleNotificationIntent(intent)
 
-        // Request WiFi & Nearby Device Runtime Permissions
-        requestNetworkPermissions()
-
-        // Start background discovery & network services
-        try {
-            startForegroundService(Intent(this, DiscoveryService::class.java))
-            startForegroundService(Intent(this, MeshNetworkService::class.java))
-        } catch (e: Exception) {
-            try {
-                startService(Intent(this, DiscoveryService::class.java))
-                startService(Intent(this, MeshNetworkService::class.java))
-            } catch (e2: Exception) { }
+        if (hasRequiredNetworkPermissions()) {
+            _networkPermissionsGranted.value = true
+            startNetworkServices()
+        } else {
+            requestNetworkPermissions()
         }
 
         setContent {
             val targetPeerId by targetPeerIdFlow.collectAsState()
+            val networkPermissionsGranted by _networkPermissionsGranted.collectAsState()
 
             HyperShareTheme {
                 Surface(
@@ -56,6 +53,7 @@ class MainActivity : ComponentActivity() {
                 ) {
                     HyperShareNavGraph(
                         targetPeerId = targetPeerId,
+                        networkPermissionsGranted = networkPermissionsGranted,
                         onPeerNavigated = { _targetPeerIdFlow.value = null }
                     )
                 }
@@ -69,6 +67,18 @@ class MainActivity : ComponentActivity() {
         handleNotificationIntent(intent)
     }
 
+    override fun onRequestPermissionsResult(
+        requestCode: Int,
+        permissions: Array<String>,
+        grantResults: IntArray
+    ) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults)
+        if (requestCode == NETWORK_PERMISSION_REQUEST_CODE && hasRequiredNetworkPermissions()) {
+            _networkPermissionsGranted.value = true
+            startNetworkServices()
+        }
+    }
+
     private fun handleNotificationIntent(intent: Intent?) {
         val peerId = intent?.getStringExtra("OPEN_PEER_ID")
         if (!peerId.isNullOrEmpty()) {
@@ -78,20 +88,40 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun requestNetworkPermissions() {
-        val permissions = mutableListOf(
-            Manifest.permission.CAMERA,
-            Manifest.permission.ACCESS_FINE_LOCATION,
-            Manifest.permission.ACCESS_COARSE_LOCATION,
-            Manifest.permission.ACCESS_WIFI_STATE,
-            Manifest.permission.CHANGE_WIFI_STATE,
-            Manifest.permission.CHANGE_WIFI_MULTICAST_STATE
-        )
-
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            permissions.add(Manifest.permission.NEARBY_WIFI_DEVICES)
-            permissions.add(Manifest.permission.POST_NOTIFICATIONS)
+        val permissions = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            arrayOf(Manifest.permission.NEARBY_WIFI_DEVICES)
+        } else {
+            arrayOf(Manifest.permission.ACCESS_FINE_LOCATION)
         }
+        ActivityCompat.requestPermissions(this, permissions, NETWORK_PERMISSION_REQUEST_CODE)
+    }
 
-        ActivityCompat.requestPermissions(this, permissions.toTypedArray(), 101)
+    private fun hasRequiredNetworkPermissions(): Boolean {
+        val permission = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            Manifest.permission.NEARBY_WIFI_DEVICES
+        } else {
+            Manifest.permission.ACCESS_FINE_LOCATION
+        }
+        return checkSelfPermission(permission) == PackageManager.PERMISSION_GRANTED
+    }
+
+    private fun startNetworkServices() {
+        if (networkServicesStarted) return
+        networkServicesStarted = true
+        try {
+            startForegroundService(Intent(this, DiscoveryService::class.java))
+            startForegroundService(Intent(this, MeshNetworkService::class.java))
+        } catch (e: Exception) {
+            try {
+                startService(Intent(this, DiscoveryService::class.java))
+                startService(Intent(this, MeshNetworkService::class.java))
+            } catch (e2: Exception) {
+                networkServicesStarted = false
+            }
+        }
+    }
+
+    companion object {
+        private const val NETWORK_PERMISSION_REQUEST_CODE = 101
     }
 }

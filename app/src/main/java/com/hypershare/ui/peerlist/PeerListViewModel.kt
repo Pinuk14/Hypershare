@@ -2,9 +2,11 @@ package com.hypershare.ui.peerlist
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import android.net.wifi.p2p.WifiP2pDevice
 import com.hypershare.model.ConnectedPeer
 import com.hypershare.model.PeerDiscoveryEvent
 import com.hypershare.model.PeerMode
+import com.hypershare.service.WifiDirectConnectionState
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -15,7 +17,10 @@ data class PeerListUiState(
     val peers: List<ConnectedPeer> = emptyList(),
     val currentMode: PeerMode = PeerMode.MODE_1_WIFI,
     val showDemoPeers: Boolean = true,
-    val isRefreshing: Boolean = false
+    val isRefreshing: Boolean = false,
+    val wifiDirectPeers: List<WifiP2pDevice> = emptyList(),
+    val wifiDirectConnection: WifiDirectConnectionState = WifiDirectConnectionState(),
+    val wifiDirectPeerIds: Map<String, String> = emptyMap()
 )
 
 class PeerListViewModel : ViewModel() {
@@ -66,5 +71,17 @@ class PeerListViewModel : ViewModel() {
                 _uiState.value = _uiState.value.copy(peers = currentPeers)
             }
         }
+    }
+
+    fun updateWifiDirectPeers(peers: List<WifiP2pDevice>) {
+        _uiState.value = _uiState.value.copy(wifiDirectPeers = peers)
+    }
+
+    fun updateWifiDirectConnection(state: WifiDirectConnectionState) {
+        _uiState.value = _uiState.value.copy(wifiDirectConnection = state)
+    }
+
+    fun updateWifiDirectPeerIds(peerIds: Map<String, String>) {
+        _uiState.value = _uiState.value.copy(wifiDirectPeerIds = peerIds)
     }
 }

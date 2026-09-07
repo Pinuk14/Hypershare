@@ -12,6 +12,7 @@ import com.hypershare.model.PacketHeader
 import com.hypershare.model.PacketType
 import com.hypershare.protocol.PacketBuilder
 import com.hypershare.protocol.PacketParser
+import com.hypershare.application.UserIdentityManager
 import com.hypershare.ui.chat.ChatMessageItem
 import com.hypershare.ui.chat.MessageStatus
 import kotlinx.coroutines.CoroutineScope
@@ -30,6 +31,7 @@ import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicInteger
 
 data class AckEvent(val msgId: String, val status: MessageStatus)
+data class PeerHandshakeEvent(val peerId: String, val ipAddress: String)
 
 class LanSocketManager private constructor() {
 
@@ -58,6 +60,10 @@ class LanSocketManager private constructor() {
 
     private val _contactAcceptEventsFlow = MutableSharedFlow<ContactAcceptEvent>(replay = 0, extraBufferCapacity = 64)
     val contactAcceptEventsFlow: SharedFlow<ContactAcceptEvent> = _contactAcceptEventsFlow.asSharedFlow()
+
+    private val _peerHandshakeEventsFlow = MutableSharedFlow<PeerHandshakeEvent>(replay = 0, extraBufferCapacity = 16)
+    val peerHandshakeEventsFlow: SharedFlow<PeerHandshakeEvent> = _peerHandshakeEventsFlow.asSharedFlow()
+    private val helloResponsesSent = ConcurrentHashMap.newKeySet<Socket>()
 
     @Volatile var activeChatPeerId: String? = null
     @Volatile var activeGroupChatId: String? = null
@@ -285,6 +291,10 @@ class LanSocketManager private constructor() {
                     when (packet.header.type) {
                         PacketType.HELLO -> {
                             Log.d(TAG, "HELLO from peerId=$sourcePeerId ip=$senderIp")
+                            if (sourcePeerId.isNotEmpty()) {
+                                _peerHandshakeEventsFlow.emit(PeerHandshakeEvent(sourcePeerId, senderIp))
+                                sendHelloResponseIfNeeded(socket, sourcePeerId)
+                            }
                         }
                         PacketType.MSG -> {
                             val payloadText = String(packet.payload, StandardCharsets.UTF_8)
@@ -375,8 +385,56 @@ class LanSocketManager private constructor() {
                     activeSockets.remove(key)
                     activeOutputStreams.remove(key)
                 }
+                helloResponsesSent.remove(socket)
                 try { socket.close() } catch (_: Exception) { }
             }
+        }
+    }
+
+    /** Opens a TCP socket and completes only the existing HELLO handshake. */
+    fun connectToPeer(targetIp: String, port: Int = DEFAULT_PORT, senderPeerId: String) {
+        if (targetIp.isEmpty()) return
+        scope.launch {
+            try {
+                val existingSocket = activeSockets[targetIp]
+                if (existingSocket != null && !existingSocket.isClosed) return@launch
+
+                val socket = Socket(targetIp, port).apply { keepAlive = true }
+                activeSockets[targetIp] = socket
+                activeOutputStreams.remove(targetIp)
+                sendHello(socket, targetIp, senderPeerId)
+                helloResponsesSent.add(socket)
+                handleIncomingSocket(socket)
+            } catch (e: Exception) {
+                Log.e(TAG, "Failed to open TCP handshake connection to $targetIp:$port", e)
+                activeSockets.remove(targetIp)
+                activeOutputStreams.remove(targetIp)
+            }
+        }
+    }
+
+    private fun sendHelloResponseIfNeeded(socket: Socket, targetPeerId: String) {
+        if (!helloResponsesSent.add(socket)) return
+        val context = appContext ?: return
+        val localPeerId = UserIdentityManager.getInstance(context).getPeerId()
+        sendHello(socket, targetPeerId, localPeerId)
+    }
+
+    private fun sendHello(socket: Socket, targetPeerId: String, senderPeerId: String) {
+        val helloPacket = PacketBuilder.buildHelloPacket(
+            sourcePeerId = senderPeerId,
+            destPeerId = targetPeerId,
+            seqNum = sequenceCounter.getAndIncrement(),
+            publicKeyBytes = senderPeerId.toByteArray(StandardCharsets.UTF_8)
+        )
+        val helloBytes = PacketBuilder.serializePacket(helloPacket)
+        val output = activeOutputStreams.getOrPut(targetPeerId) {
+            DataOutputStream(socket.getOutputStream())
+        }
+        synchronized(output) {
+            output.writeInt(helloBytes.size)
+            output.write(helloBytes)
+            output.flush()
         }
     }
 
@@ -586,11 +644,16 @@ class LanSocketManager private constructor() {
     fun stopServer() {
         isRunning = false
         try { serverSocket?.close() } catch (e: Exception) { }
+        closeActiveConnections()
+    }
+
+    fun closeActiveConnections() {
         for (socket in activeSockets.values) {
             try { socket.close() } catch (e: Exception) { }
         }
         activeSockets.clear()
         activeOutputStreams.clear()
+        helloResponsesSent.clear()
     }
 
 }
