@@ -63,6 +63,15 @@ class LanSocketManager private constructor() {
 
     private val _peerHandshakeEventsFlow = MutableSharedFlow<PeerHandshakeEvent>(replay = 0, extraBufferCapacity = 16)
     val peerHandshakeEventsFlow: SharedFlow<PeerHandshakeEvent> = _peerHandshakeEventsFlow.asSharedFlow()
+    data class PendingOutboundMessage(
+        val msgId: String,
+        val targetPeerId: String,
+        val text: String,
+        val senderPeerId: String,
+        val timestamp: Long = System.currentTimeMillis()
+    )
+
+    private val pendingOutboundMessages = java.util.concurrent.ConcurrentLinkedQueue<PendingOutboundMessage>()
     private val helloResponsesSent = ConcurrentHashMap.newKeySet<Socket>()
 
     @Volatile var activeChatPeerId: String? = null
@@ -294,6 +303,7 @@ class LanSocketManager private constructor() {
                             if (sourcePeerId.isNotEmpty()) {
                                 _peerHandshakeEventsFlow.emit(PeerHandshakeEvent(sourcePeerId, senderIp))
                                 sendHelloResponseIfNeeded(socket, sourcePeerId)
+                                flushPendingMessagesForPeer(sourcePeerId)
                             }
                         }
                         PacketType.MSG -> {
@@ -365,13 +375,22 @@ class LanSocketManager private constructor() {
                                 val repository = com.hypershare.db.MessageRepository(ctx)
                                 scope.launch(Dispatchers.IO) {
                                     repository.markPeerAcceptanceReceived(sourcePeerId)
+                                    // If we also trusted this peer, send reciprocal CONTACT_ACCEPT so both sides are instantly mutually trusted
+                                    if (repository.isPeerTrusted(sourcePeerId)) {
+                                        val myPeerId = UserIdentityManager.getInstance(ctx).getPeerId()
+                                        sendContactAcceptPacket(
+                                            targetPeerId = sourcePeerId,
+                                            targetIp = senderIp,
+                                            senderPeerId = myPeerId
+                                        )
+                                    }
                                 }
                             }
                             _contactAcceptEventsFlow.emit(ContactAcceptEvent(sourcePeerId))
                             val senderName = appContext?.let { ctx ->
                                 com.hypershare.db.MessageRepository(ctx).getPeerDisplayName(sourcePeerId)
                             } ?: sourcePeerId.take(12)
-                            showIncomingNotification(sourcePeerId, "$senderName accepted & saved your contact! Tap to pair.")
+                            showIncomingNotification(sourcePeerId, "$senderName accepted & saved your contact! Mutual pairing complete.")
                         }
                         else -> {}
                     }
@@ -395,18 +414,42 @@ class LanSocketManager private constructor() {
     fun connectToPeer(targetIp: String, port: Int = DEFAULT_PORT, senderPeerId: String) {
         if (targetIp.isEmpty()) return
         scope.launch {
-            try {
-                val existingSocket = activeSockets[targetIp]
-                if (existingSocket != null && !existingSocket.isClosed) return@launch
+            val existingSocket = activeSockets[targetIp]
+            if (existingSocket != null && !existingSocket.isClosed) return@launch
 
-                val socket = Socket(targetIp, port).apply { keepAlive = true }
+            var socket: Socket? = null
+            var attempts = 0
+            val maxAttempts = 6
+            while (socket == null && attempts < maxAttempts && isRunning) {
+                try {
+                    attempts++
+                    val s = Socket()
+                    s.connect(java.net.InetSocketAddress(targetIp, port), 2000)
+                    s.keepAlive = true
+                    socket = s
+                } catch (e: Exception) {
+                    Log.w(TAG, "Attempt $attempts/$maxAttempts: Handshake connect to $targetIp:$port failed (${e.message}), retrying in 400ms...")
+                    if (attempts < maxAttempts) {
+                        kotlinx.coroutines.delay(400)
+                    }
+                }
+            }
+
+            if (socket == null) {
+                Log.e(TAG, "Failed to open TCP handshake connection to $targetIp:$port after $maxAttempts attempts")
+                activeSockets.remove(targetIp)
+                activeOutputStreams.remove(targetIp)
+                return@launch
+            }
+
+            try {
                 activeSockets[targetIp] = socket
                 activeOutputStreams.remove(targetIp)
                 sendHello(socket, targetIp, senderPeerId)
                 helloResponsesSent.add(socket)
                 handleIncomingSocket(socket)
             } catch (e: Exception) {
-                Log.e(TAG, "Failed to open TCP handshake connection to $targetIp:$port", e)
+                Log.e(TAG, "Failed to complete initial TCP handshake to $targetIp:$port", e)
                 activeSockets.remove(targetIp)
                 activeOutputStreams.remove(targetIp)
             }
@@ -438,6 +481,27 @@ class LanSocketManager private constructor() {
         }
     }
 
+    fun queuePendingMessage(msg: PendingOutboundMessage) {
+        pendingOutboundMessages.add(msg)
+        Log.d(TAG, "Queued pending emergency message for ${msg.targetPeerId}: ${msg.text}")
+    }
+
+    fun flushPendingMessagesForPeer(peerId: String) {
+        val matching = pendingOutboundMessages.filter { it.targetPeerId == peerId }
+        if (matching.isEmpty()) return
+        Log.d(TAG, "Flushing ${matching.size} queued emergency messages for peerId=$peerId")
+        matching.forEach { pending ->
+            pendingOutboundMessages.remove(pending)
+            sendMessageToPeer(
+                targetIp = "",
+                text = pending.text,
+                senderPeerId = pending.senderPeerId,
+                msgId = pending.msgId,
+                targetPeerId = pending.targetPeerId
+            )
+        }
+    }
+
     fun sendMessageToPeer(
         targetIp: String,
         port: Int = DEFAULT_PORT,
@@ -455,7 +519,10 @@ class LanSocketManager private constructor() {
 
                 if (socket == null || socket.isClosed) {
                     if (targetIp.isEmpty()) {
-                        Log.w(TAG, "Cannot send message to $targetPeerId — targetIp is empty")
+                        Log.w(TAG, "Cannot send message to $targetPeerId immediately — socket not yet open. Enqueuing for Wi-Fi Direct delivery.")
+                        if (targetPeerId.isNotEmpty()) {
+                            queuePendingMessage(PendingOutboundMessage(msgId, targetPeerId, text, senderPeerId))
+                        }
                         return@launch
                     }
                     Log.d(TAG, "Opening new TCP connection to $targetIp:$port")
@@ -610,9 +677,19 @@ class LanSocketManager private constructor() {
                     targetIp.isNotEmpty() && activeOutputStreams.containsKey(targetIp) -> targetIp
                     else -> targetPeerId
                 }
-                var socket = activeSockets[streamKey] ?: if (targetIp.isNotEmpty()) {
-                    try { Socket(targetIp, DEFAULT_PORT) } catch (_: Exception) { null }
-                } else null
+                var socket = activeSockets[streamKey]
+                if (socket == null && targetIp.isNotEmpty()) {
+                    try {
+                        val newSocket = Socket(targetIp, DEFAULT_PORT)
+                        newSocket.keepAlive = true
+                        activeSockets[targetPeerId] = newSocket
+                        activeSockets[targetIp] = newSocket
+                        scope.launch(Dispatchers.IO) {
+                            handleIncomingSocket(newSocket)
+                        }
+                        socket = newSocket
+                    } catch (_: Exception) { null }
+                }
 
                 if (socket == null) return@launch
                 val out = activeOutputStreams.getOrPut(streamKey) {

@@ -65,10 +65,12 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
             peerId.take(12)
         }
 
-        _uiState.value = _uiState.value.copy(
+        // Reset UI state immediately to prevent showing previous peer's messages
+        _uiState.value = ChatUiState(
             peerId = peerId,
             peerName = initialName,
-            peerIpAddress = targetIp
+            peerIpAddress = targetIp,
+            messages = emptyList()
         )
 
         // Load persisted history, display name, trust status, peer acceptance, and outgoing count from SQLite on IO thread
@@ -98,8 +100,8 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
                 }
             }
 
-            // Merge existing in-memory (from live session) with DB history, sorted by timestamp
-            val merged = (_uiState.value.messages + historicalMessages)
+            // Sort historical messages strictly for this peer
+            val sorted = historicalMessages
                 .distinctBy { it.id }
                 .sortedBy { it.timestamp }
 
@@ -108,7 +110,7 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
                 isPeerTrusted = isTrusted,
                 hasPeerAcceptedUs = hasPeerAccepted,
                 untrustedOutgoingCount = outgoingCount,
-                messages = merged
+                messages = sorted
             )
 
             // Trigger READ_ACK for any unread incoming messages now that DB load is complete

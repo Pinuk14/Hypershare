@@ -64,7 +64,9 @@ import com.hypershare.ui.components.AmbientMeshGraphCanvas
 @Composable
 fun ChatScreen(
     viewModel: ChatViewModel,
-    onBackClick: () -> Unit
+    onBackClick: () -> Unit,
+    onConnectWifiDirect: (() -> Unit)? = null,
+    wifiDirectConnection: com.hypershare.service.WifiDirectConnectionState? = null
 ) {
     val uiState by viewModel.uiState.collectAsState()
     var showMenu by remember { mutableStateOf(false) }
@@ -212,6 +214,41 @@ fun ChatScreen(
                             )
                         }
                     }
+                }
+            }
+
+            // Wi-Fi Direct Emergency Mesh Connection Status Banner (when target IP is empty / Emergency Mode)
+            if (uiState.peerIpAddress.isEmpty() && wifiDirectConnection != null) {
+                val isP2pConnected = wifiDirectConnection.isConnected
+                val isP2pConnecting = wifiDirectConnection.isConnecting
+                val statusText = when {
+                    isP2pConnected -> "● P2P Mesh Connected (Direct Link Active)"
+                    isP2pConnecting -> "◌ Connecting Wi-Fi Direct Mesh..."
+                    else -> "⚡ P2P Offline • Tap to Connect Directly"
+                }
+                val statusColor = when {
+                    isP2pConnected -> ConnectedGreen
+                    isP2pConnecting -> SignalBlue
+                    else -> WarningAmber
+                }
+
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp, vertical = 2.dp)
+                        .clickable(enabled = !isP2pConnected && !isP2pConnecting) {
+                            onConnectWifiDirect?.invoke()
+                        },
+                    horizontalArrangement = Arrangement.Center,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        text = statusText,
+                        color = statusColor,
+                        fontFamily = FontFamily.Monospace,
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.Bold
+                    )
                 }
             }
 

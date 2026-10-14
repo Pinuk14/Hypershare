@@ -11,6 +11,7 @@ import android.os.IBinder
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -194,6 +195,11 @@ fun HyperShareNavGraph(
             }
             entry<PeerListNavKey> { key ->
                 val vm: PeerListViewModel = viewModel()
+                val currentContext = LocalContext.current
+
+                LaunchedEffect(Unit) {
+                    vm.initRepository(currentContext)
+                }
 
                 LaunchedEffect(key.mode) {
                     vm.setMode(key.mode)
@@ -238,15 +244,17 @@ fun HyperShareNavGraph(
                     viewModel = vm,
                     onPeerClick = { peerId ->
                         // Look up the peer's resolved IP and name before navigating to chat
-                        val peer = discoveryService?.getActivePeers()?.find { it.peerId == peerId }
-                        val ip = peer?.ipAddress?.hostAddress ?: ""
-                        val name = peer?.displayName ?: ""
-                        backStack.add(ChatNavKey(peerId = peerId, peerName = name, peerIp = ip, peerPort = peer?.port ?: 47200))
+                        val activePeer = discoveryService?.getActivePeers()?.find { it.peerId == peerId }
+                        val convItem = vm.uiState.value.conversationItems.find { it.peerId == peerId }
+                        val ip = activePeer?.ipAddress?.hostAddress ?: convItem?.ipAddress ?: ""
+                        val name = activePeer?.displayName ?: convItem?.displayName ?: ""
+                        val port = activePeer?.port ?: convItem?.port ?: 47200
+                        backStack.add(ChatNavKey(peerId = peerId, peerName = name, peerIp = ip, peerPort = port))
                     },
                     onWifiDirectPeerClick = { peer ->
-                        val peerId = vm.uiState.value.wifiDirectPeerIds[peer.deviceAddress]
+                        val peerId = vm.uiState.value.wifiDirectPeerIds[peer.deviceAddress] ?: peer.deviceAddress
                         val connection = vm.uiState.value.wifiDirectConnection
-                        if (connection.isConnected && !peerId.isNullOrEmpty()) {
+                        if (connection.isConnected) {
                             val targetIp = if (connection.isGroupOwner) "" else connection.groupOwnerIpAddress.orEmpty()
                             backStack.add(
                                 ChatNavKey(
@@ -269,7 +277,7 @@ fun HyperShareNavGraph(
                 )
             }
             entry<ChatNavKey> { key ->
-                val vm: ChatViewModel = viewModel()
+                val vm: ChatViewModel = viewModel(key = key.peerId)
 
                 // Wire up real peer identity, IP address, and socket manager
                 LaunchedEffect(key) {
@@ -283,9 +291,22 @@ fun HyperShareNavGraph(
                     )
                 }
 
+                // In Emergency Mode (no local IP), auto-initiate Wi-Fi Direct connection to the peer
+                LaunchedEffect(key.peerId, key.peerIp, meshNetworkService) {
+                    if (key.peerIp.isEmpty()) {
+                        meshNetworkService?.requestConnectToPeer(key.peerId)
+                    }
+                }
+
+                val p2pState = meshNetworkService?.wifiDirectController?.connectionState?.collectAsState()?.value
+
                 ChatScreen(
                     viewModel = vm,
-                    onBackClick = { backStack.removeLastOrNull() }
+                    onBackClick = { backStack.removeLastOrNull() },
+                    onConnectWifiDirect = {
+                        meshNetworkService?.requestConnectToPeer(key.peerId)
+                    },
+                    wifiDirectConnection = p2pState
                 )
             }
             entry<QrScannerNavKey> {
@@ -365,7 +386,7 @@ fun HyperShareNavGraph(
                 )
             }
             entry<GroupChatNavKey> { key ->
-                val vm: GroupChatViewModel = viewModel()
+                val vm: GroupChatViewModel = viewModel(key = key.groupId)
                 LaunchedEffect(key) {
                     vm.loadGroup(key.groupId)
                 }

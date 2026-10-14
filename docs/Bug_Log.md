@@ -20,12 +20,13 @@
 
 ### [ISSUE-004] QR Code Share ID Scan & Security Key Exchange Workflow
 - **Severity**: P1 — High
-- **Phase/Week**: Phase 1 — Week 5 & Phase 0 Integration
-- **Component**: `ui/components/QrCodeCard`, `security/TofuManager`, `security/PeerKeyStore`
+- **Phase/Week**: Phase 1 — Week 7
+- **Component**: `ui/qrscanner/QrScannerScreen.kt`, `ui/qrscanner/QrScannerViewModel.kt`, `identity/IdentityManager.kt`, `security/TofuManager.kt`
 - **Environment**: All Android devices with camera support
 - **Description**: Scanning a peer's QR Share ID on the Scan screen must extract the peer's public key fingerprint and device metadata, perform ECDH shared key derivation, verify TOFU (Trust-On-First-Use) key store pinning, and authorize encrypted peer-to-peer communication.
-- **Root Cause**: Planned security feature to be fully wired with CameraX / QR scanner integration during Phase 1 peer discovery and key exchange.
-- **Status**: IN_PROGRESS (Logged for Phase 1 security wiring)
+- **Root Cause**: CameraX preview, ZXing BitMatrix decoding, and Ed25519 signature verification needed end-to-end integration into navigation flow.
+- **Resolution**: Built `QrScannerScreen.kt` and `QrScannerViewModel.kt` with CameraX preview, dynamic reticle box, gallery photo decoding fallback, and 5-step verification pipeline enforcing Ed25519 signature validation and TOFU public key pinning before establishing mutual trust.
+- **Status**: RESOLVED
 
 ---
 
@@ -61,6 +62,58 @@
 - **Description**: Long-pressing a group item on the peer list screen does not show a deletion dialog to remove or dissolve the group chat thread.
 - **Root Cause**: `GroupGlassListItem` only implemented `clickable`, lacking `combinedClickable(onLongClick = ...)` and confirmation dialog logic.
 - **Resolution**: Updated `GroupGlassListItem` to use `combinedClickable` with `onLongClick` handler. Added a confirmation `AlertDialog` ("Delete Group Chat?") in `PeerListScreen.kt` calling `GroupRepository.deleteGroup()`.
+- **Status**: RESOLVED
+
+---
+
+### [ISSUE-008] Mutual TCP HELLO Handshake Infinite Loop
+- **Severity**: P1 — High
+- **Phase/Week**: Phase 2 — Week 12 (SIH Prototype)
+- **Component**: `service/LanSocketManager.kt`
+- **Environment**: Mode 2 Wi-Fi Direct and Mode 1 LAN TCP Handshake
+- **Description**: Establishing a bidirectional TCP socket between client and Group Owner caused a circular flood of `HELLO` (`0x01`) packets because receiving a HELLO automatically triggered sending a HELLO packet back over the same socket indefinitely.
+- **Root Cause**: Unconditional HELLO response emission without tracking whether a response had already been dispatched for that socket instance.
+- **Resolution**: Added `private val helloResponsesSent = ConcurrentHashMap.newKeySet<Socket>()` in `LanSocketManager.kt`. When an outbound client socket sends a HELLO, or an inbound server socket replies with a HELLO, the socket is registered in `helloResponsesSent`. Subsequent HELLO packets on the same socket suppress duplicate replies.
+- **Status**: RESOLVED
+
+---
+
+### [ISSUE-009] Android 13+ (API 33+) Wi-Fi Direct Runtime Permission Gating
+- **Severity**: P0 — Critical
+- **Phase/Week**: Phase 2 — Week 12 (SIH Prototype)
+- **Component**: `MainActivity.kt`, `service/WifiDirectController.kt`
+- **Environment**: Android 13+ (API 33+, Tiramisu) Devices
+- **Description**: On Android 13+ devices, Wi-Fi Direct peer discovery failed silently or threw `SecurityException` when attempting to discover peers or request peer lists because only legacy `ACCESS_FINE_LOCATION` was requested.
+- **Root Cause**: Android 13 introduced `Manifest.permission.NEARBY_WIFI_DEVICES` which is strictly required for Wi-Fi Direct operations.
+- **Resolution**: Added version checks (`Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU`) in `MainActivity.kt` and `WifiDirectController.kt` to request and verify `NEARBY_WIFI_DEVICES` on API 33+ (and `ACCESS_FINE_LOCATION` on API < 33). Added a reactive `_networkPermissionsGranted` StateFlow in `MainActivity` to defer starting foreground network services until permission is confirmed.
+### [ISSUE-010] Chat Database Cross-Talk & Shared In-Memory Messages Across Peers
+- **Severity**: P0 — Critical
+- **Phase/Week**: Phase 2 — Week 12
+- **Component**: `ui/navigation/NavGraph.kt`, `ui/chat/ChatViewModel.kt`, `service/DiscoveryService.kt`
+- **Environment**: Multi-Device LAN / Android Client
+- **Description**: Messages sent to or received from Peer A were displayed inside Peer B's chat room.
+- **Root Cause**: (1) `ChatViewModel` in `NavGraph` was not keyed by `peerId` in Compose Navigation. (2) `ChatViewModel.loadPeerMessages()` merged existing in-memory messages with the newly loaded historical messages without purging the previous peer's state. (3) mDNS discovery used `HyperShare_Username` while UDP/TCP used `peer-uuid`, creating split identities.
+- **Resolution**: Keyed `viewModel(key = key.peerId)` in `NavGraph.kt`, immediately reset `ChatUiState` with `messages = emptyList()` upon opening a chat, and synchronized mDNS/UDP identity using cryptographic `peerId`.
+- **Status**: RESOLVED
+
+### [ISSUE-011] Emergency Mode Missing Ever-Connected Device History for Multi-Hop Mesh
+- **Severity**: P1 — High
+- **Phase/Week**: Phase 2 — Week 12
+- **Component**: `ui/peerlist/PeerListViewModel.kt`, `ui/peerlist/PeerListScreen.kt`, `db/MessageRepository.kt`
+- **Environment**: All Android Devices
+- **Description**: Switching to Emergency Mode (Mode 2) only displayed devices currently visible in live Wi-Fi Direct scans. Because multi-hop mesh routing forwards packets across known destination peers, users could not select previously connected peers to compose or queue messages.
+- **Root Cause**: Peer list view state in Mode 2 was hard-filtered to only the instantaneous Wi-Fi Direct scan list rather than unifying known persistent peer conversations.
+- **Resolution**: Added `getAllConversations()` query in `MessageRepository.kt` and integrated conversation history in `PeerListViewModel.kt` to present all historical peer conversations in both Local and Emergency modes with live presence overlays.
+- **Status**: RESOLVED
+
+### [ISSUE-012] Local Mode Discovery Card Jitter & Scanning Instability
+- **Severity**: P2 — Medium
+- **Phase/Week**: Phase 2 — Week 12
+- **Component**: `ui/peerlist/PeerListViewModel.kt`, `ui/peerlist/PeerListScreen.kt`
+- **Environment**: All Android Devices
+- **Description**: Continuous background network scanning caused peer cards to constantly reorder and jump around the user's screen.
+- **Root Cause**: Incoming discovery events were appended/mutated dynamically without stable timestamp-based ordering.
+- **Resolution**: Re-architected conversation list to sort stably by latest activity/message timestamp (`lastActivity DESC`, WhatsApp-style) and highlighted active LAN peers with a distinct green outline (`BorderStroke(1.5.dp, ConnectedGreen)`) while removing redundant duplicate status chips and avatar rings.
 - **Status**: RESOLVED
 
 ---

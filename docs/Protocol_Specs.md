@@ -65,18 +65,16 @@ Offset  Size  Field             Type        Description
 
 | Type Byte | Name | Direction | Description |
 |---|---|---|---|
-| `0x01` | `HELLO` | Broadcast | Peer announcement and GO candidacy. First packet on any connection. |
-| `0x02` | `HELLO_ACK` | Unicast | Response to HELLO. Completes handshake. |
-| `0x03` | `MSG` | Unicast | Text message. |
-| `0x04` | `MSG_ACK` | Unicast | Acknowledgement of text message receipt. |
-| `0x05` | `DATA_CHUNK` | Unicast | One chunk of a file transfer. |
-| `0x06` | `DATA_ACK` | Unicast | Acknowledgement of a received DATA_CHUNK. |
-| `0x07` | `DATA_NACK` | Unicast | Negative ACK — chunk CRC32 mismatch, request retransmit. |
-| `0x08` | `STREAM_FRAME` | Unicast | One frame of a media stream. |
-| `0x09` | `STREAM_ACK` | Unicast | Stream frame received (flow control). |
-| `0x0A` | `RREQ` | Broadcast | Route Request — initiate route discovery. |
-| `0x0B` | `RREP` | Unicast | Route Reply — confirm route to destination. |
-| `0x0C` | `RERR` | Broadcast | Route Error — notify affected nodes of broken route. |
+| `0x01` | `HELLO` | Broadcast / Unicast | Peer announcement and GO candidacy. First packet on any connection. |
+| `0x02` | `ACK` | Unicast | Generic packet receipt acknowledgement. |
+| `0x03` | `MSG` | Unicast | Encrypted text message. |
+| `0x04` | `DATA` | Unicast | One chunk of a file transfer. |
+| `0x05` | `STREAM` | Unicast | One frame of a media stream. |
+| `0x06` | `RREQ` | Broadcast | Route Request — initiate route discovery. |
+| `0x07` | `RREP` | Unicast | Route Reply — confirm route to destination. |
+| `0x08` | `RERR` | Broadcast | Route Error — notify affected nodes of broken route. |
+| `0x09` | `READ_ACK` | Unicast | Read receipt acknowledgement — triggers 2 green ticks (`✓✓`). |
+| `0x0A` | `CONTACT_ACCEPT` | Unicast | Mutual contact acceptance confirmation packet. |
 | `0x0D` | `DISCONNECT` | Unicast | Graceful peer disconnect notification. |
 | `0x0E` | `PING` | Unicast | Keep-alive / latency measurement. |
 | `0x0F` | `PONG` | Unicast | Response to PING. |
@@ -87,12 +85,13 @@ Offset  Size  Field             Type        Description
 | `0x20` | `GROUP_CREATE` | Unicast | Admin creates a group and distributes to initial members. |
 | `0x21` | `GROUP_JOIN_ACK` | Unicast | Member accepts group invite. |
 | `0x22` | `GROUP_MSG` | Unicast | A message sent to a group. |
-| `0x23` | `GROUP_MSG_ACK` | Unicast | Per-recipient group message acknowledgement. |
+| `0x23` | `GROUP_MSG_ACK` | Unicast | Per-recipient group message delivery acknowledgement. |
 | `0x24` | `GROUP_MEMBER_ADD` | Unicast | Admin adds a new member to an existing group. |
 | `0x25` | `GROUP_MEMBER_REMOVE` | Unicast | Admin removes a member from a group. |
 | `0x26` | `GROUP_KICKED` | Unicast | Notification sent to the removed member. |
 | `0x27` | `GROUP_DISSOLVE` | Broadcast/Unicast | Admin explicitly dissolves a group early. |
 | `0x28` | `GROUP_RESTORE` | Unicast | Trigger group reactivation when members reconnect. |
+| `0x29` | `GROUP_MSG_READ` | Unicast | Member read receipt acknowledgement for a group message. |
 | `0xFF` | `ERROR` | Unicast | Generic error response with error code in payload. |
 
 ---
@@ -416,12 +415,16 @@ data class ContactCard(
 - **`GROUP_CREATE` (`0x20`)**: Payload contains `groupId` (UUID v4 string), `groupName` (UTF-8 string), `adminUserId` (32-byte hex string), `groupType` (`PERMANENT` or `TEMPORARY`), and initial `members` list `[{"userId", "displayName", "publicKey"}]`.
 - **`GROUP_JOIN_ACK` (`0x21`)**: Payload contains `groupId` and `joiningUserId`. Sent by a member acknowledging receipt and acceptance of `GROUP_CREATE`.
 - **`GROUP_MSG` (`0x22`)**: Payload contains `groupId`, `messageId` (UUID v4 string), `senderId`, `senderDisplayName`, `timestamp` (Int64 ms), and `text` (UTF-8 string content).
-- **`GROUP_MSG_ACK` (`0x23`)**: Payload contains `groupId`, `messageId`, and `ackUserId`.
+- **`GROUP_MSG_ACK` (`0x23`)**: Payload contains `groupId`, `messageId`, and `ackUserId`. Emitted when a peer's local device receives and stores the group message.
 - **`GROUP_MEMBER_ADD` (`0x24`)**: Payload contains `groupId`, `newMember` object (`userId`, `displayName`, `publicKey`), and `adminUserId`.
 - **`GROUP_MEMBER_REMOVE` (`0x25`)**: Payload contains `groupId`, `removedUserId`, and `adminUserId`. Admin authorization required.
 - **`GROUP_KICKED` (`0x26`)**: Payload contains `groupId` and `reason` string (e.g. "Removed by admin").
 - **`GROUP_DISSOLVE` (`0x27`)**: Payload contains `groupId` and `dissolveTimestamp` (Int64 ms). Broadcast to all members to mark temporary or permanent group inactive.
 - **`GROUP_RESTORE` (`0x28`)**: Payload contains `groupId` and `activeMemberIds` array. Triggered upon peer reconnection on the same local network to synchronize active group state.
+- **`GROUP_MSG_READ` (`0x29`)**: Payload contains `groupId`, `messageId`, and `readerUserId`. Emitted when the recipient opens the group chat view and marks unread messages as read. Drives the 3-stage tick progression:
+  - 1 Grey Tick (`✓`): Sent by local user.
+  - 2 Grey Ticks (`✓✓`): Delivered to all online members (`GROUP_MSG_ACK` receipts collected).
+  - 2 Green Ticks (`✓✓`): Viewed/read by all members (`GROUP_MSG_READ` receipts collected).
 
 ---
 
@@ -431,4 +434,26 @@ data class ContactCard(
 - On HELLO receipt: if receiver's app cannot support sender's version, send `HELLO_ACK` with `ACCEPT=0x00`, `REJECT_REASON=0x01`.
 - Minor additions (new packet types `0x14+`) are backward-compatible if old clients ignore unknown types.
 - Breaking changes require a `VERSION` bump to `0x02`.
+
+---
+
+## 13. Wi-Fi Direct (Mode 2) Socket Handshake & P2P Architecture
+
+### 13.1 P2P Group Formation & Addressing
+In Mode 2 (Disaster Mesh), Android Wi-Fi Direct devices negotiate a P2P Group:
+1. **Group Owner (GO)**: Acts as DHCP soft access point with the canonical subnet gateway IP: `192.168.49.1`.
+2. **Clients**: Assigned DHCP client IPs on `192.168.49.0/24` (typically `192.168.49.x`).
+
+### 13.2 TCP Server & Outbound Client Handshake
+1. **GO Role**: `MeshNetworkService` keeps `LanSocketManager` listening on TCP port `47200`.
+2. **Client Role**: Upon receiving `WifiP2pInfo.groupFormed == true` with `isGroupOwner == false`:
+   - Extracts `groupOwnerAddress.hostAddress` (`192.168.49.1`).
+   - Executes `LanSocketManager.connectToPeer(targetIp, port = 47200, senderPeerId)`.
+3. **HELLO Exchange**:
+   - Client sends binary `HELLO` (`0x01`) packet containing its local `sourcePeerId` and public key.
+   - GO receives `HELLO`, emits `PeerHandshakeEvent(peerId, ip)` onto `LanSocketManager.peerHandshakeEventsFlow`, and responds with its own `HELLO` packet.
+   - Mutual loop suppression: `LanSocketManager` tracks sockets in `helloResponsesSent` to guarantee each connection exchanges exactly one bidirectional handshake pair.
+4. **Device Address to Cryptographic Peer ID Mapping**:
+   - `MeshNetworkService` observes `peerHandshakeEventsFlow` and calls `wifiDirectController.associateSelectedPeerId(event.peerId)`.
+   - Maps the Wi-Fi Direct hardware MAC (`WifiP2pDevice.deviceAddress`) to the cryptographic `PeerID`, allowing Compose UI to link P2P devices to SQLite chat history and contact trust states.
 

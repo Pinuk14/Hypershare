@@ -217,29 +217,37 @@ adb -s <deviceB_serial> shell "cksum /sdcard/Download/HyperShare/testfile.mp4"
 ## Part B — Mode 2: Disaster Mesh Network Tests
 
 ### Prerequisites
-- WiFi Direct works on all test devices (not all Android OEMs implement it fully).
-- `ACCESS_FINE_LOCATION` permission granted on all devices (required for WifiP2p on Android 10+).
+- WiFi Direct supported on all test devices.
+- Runtime permissions granted: `NEARBY_WIFI_DEVICES` on Android 13+ (API 33+ / Tiramisu) or `ACCESS_FINE_LOCATION` on Android 10–12.
 - Testing location: an **open area** (parking lot, open field) works better than a room with concrete walls for controlled range testing.
 - Carry a portable battery bank — tests require devices to be mobile.
 
 ---
 
-### M2-TC-01: Two-Device WiFi Direct Group Formation
+### M2-TC-01: Two-Device WiFi Direct Group Formation & TCP Handshake
+*(SIH Prototype Verified)*
 
-**Scenario:** Two devices form a stable WiFi Direct group with correct GO assignment.
+**Scenario:** Two devices discover each other via Wi-Fi Direct, form a P2P group, establish a client-to-GO TCP socket, and complete the HELLO handshake.
 
 **Steps:**
-1. Disable WiFi LAN on both devices (forget all networks, toggle to Mode 2 in app).
-2. Launch HyperShare on Device A (higher battery) and Device B.
-3. GO election should assign Device A as GO.
-4. Wait 30 seconds after group formation.
+1. On both Device A and Device B, launch HyperShare and tap **"EMERGENCY MODE"** on the Home screen.
+2. Verify top banner displays `◌ SCANNING FOR WI-FI DIRECT DEVICES`.
+3. Verify Device B appears in Device A's peer list (and vice versa) with label `"Discovered Wi-Fi Direct • [MAC Address]"`.
+4. On Device A, tap Device B's list card to initiate connection via `WifiDirectController.connect()`.
+5. Accept the Wi-Fi Direct invitation pop-up on Device B if prompted by the Android OS.
+6. Observe status progression on both devices: `◌ CONNECTING TO WI-FI DIRECT DEVICE` -> `● CONNECTED TO [Device Name]` (client) / `● GROUP OWNER (WAITING FOR PEERS)` (GO).
+7. Observe ADB logcat for `MeshNetworkService` and `LanSocketManager`:
+   - Non-GO client opens TCP socket to `192.168.49.1:47200`.
+   - Both sides exchange binary `HELLO` packets and emit `PeerHandshakeEvent`.
+   - Peer IDs are associated with the P2P MAC addresses.
+8. On either device, tap the connected peer item to enter `ChatScreen` and send a text message.
 
 **Expected:**
-- Group forms within 20 seconds.
-- Device A's logs show `[GO] Became Group Owner. IP: 192.168.49.1`
-- Device B's logs show `[CLIENT] Connected to GO. GO IP: 192.168.49.1`
-- GO_SCORE of Device A > GO_SCORE of Device B in logs.
-- Group remains stable for 5 minutes with no drops.
+- Peer discovery time < 10 seconds.
+- Group formation completes within 15 seconds.
+- Client automatically establishes TCP connection to GO at `192.168.49.1:47200`.
+- Handshake completes cleanly without duplicate HELLO loops (`helloResponsesSent` prevents loop).
+- Messages sent from either device arrive with delivery ticks.
 
 ---
 

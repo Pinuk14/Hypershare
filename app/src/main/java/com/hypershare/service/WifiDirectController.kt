@@ -49,8 +49,16 @@ class WifiDirectController(context: Context) {
     private val _peerIds = MutableStateFlow<Map<String, String>>(emptyMap())
     val peerIds: StateFlow<Map<String, String>> = _peerIds.asStateFlow()
 
+    var myDeviceAddress: String? = null
+        private set
+    var myDeviceName: String? = null
+        private set
+
     private var receiverRegistered = false
     private var selectedPeerAddress: String? = null
+    private var lastConnectAttemptTimestamp = 0L
+    private var connectingTargetAddress: String? = null
+    private val p2pPrefs = appContext.getSharedPreferences("hypershare_p2p_mappings", Context.MODE_PRIVATE)
 
     private val receiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context, intent: Intent) {
@@ -67,10 +75,31 @@ class WifiDirectController(context: Context) {
 
                 WifiP2pManager.WIFI_P2P_PEERS_CHANGED_ACTION -> requestPeers()
 
+                WifiP2pManager.WIFI_P2P_DISCOVERY_CHANGED_ACTION -> {
+                    val discoveryState = intent.getIntExtra(
+                        WifiP2pManager.EXTRA_DISCOVERY_STATE,
+                        WifiP2pManager.WIFI_P2P_DISCOVERY_STOPPED
+                    )
+                    val isDisc = discoveryState == WifiP2pManager.WIFI_P2P_DISCOVERY_STARTED
+                    Log.d(TAG, "Wi-Fi Direct discovery state changed: isDiscovering=$isDisc")
+                    _connectionState.value = _connectionState.value.copy(isDiscovering = isDisc)
+                }
+
+                WifiP2pManager.WIFI_P2P_THIS_DEVICE_CHANGED_ACTION -> {
+                    @Suppress("DEPRECATION")
+                    val thisDevice = intent.getParcelableExtra<WifiP2pDevice>(WifiP2pManager.EXTRA_WIFI_P2P_DEVICE)
+                    if (thisDevice != null) {
+                        myDeviceAddress = thisDevice.deviceAddress
+                        myDeviceName = thisDevice.deviceName
+                        Log.d(TAG, "Local P2P Device updated: name=${thisDevice.deviceName}, address=${thisDevice.deviceAddress}")
+                    }
+                }
+
                 WifiP2pManager.WIFI_P2P_CONNECTION_CHANGED_ACTION -> {
                     @Suppress("DEPRECATION")
                     val networkInfo = intent.getParcelableExtra<NetworkInfo>(WifiP2pManager.EXTRA_NETWORK_INFO)
                     if (networkInfo?.isConnected == true) {
+                        connectingTargetAddress = null
                         requestConnectionInfo()
                     } else {
                         resetConnectionState()
@@ -90,6 +119,7 @@ class WifiDirectController(context: Context) {
             val filter = IntentFilter().apply {
                 addAction(WifiP2pManager.WIFI_P2P_STATE_CHANGED_ACTION)
                 addAction(WifiP2pManager.WIFI_P2P_PEERS_CHANGED_ACTION)
+                addAction(WifiP2pManager.WIFI_P2P_DISCOVERY_CHANGED_ACTION)
                 addAction(WifiP2pManager.WIFI_P2P_CONNECTION_CHANGED_ACTION)
                 addAction(WifiP2pManager.WIFI_P2P_THIS_DEVICE_CHANGED_ACTION)
             }
@@ -100,6 +130,15 @@ class WifiDirectController(context: Context) {
                 ContextCompat.RECEIVER_NOT_EXPORTED
             )
             receiverRegistered = true
+        }
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.Q) {
+            wifiP2pManager.requestDeviceInfo(channel) { device ->
+                if (device != null) {
+                    myDeviceAddress = device.deviceAddress
+                    myDeviceName = device.deviceName
+                    Log.d(TAG, "Local device info resolved via API 29+: name=${device.deviceName}, address=${device.deviceAddress}")
+                }
+            }
         }
         startPeerDiscovery()
     }
@@ -184,7 +223,91 @@ class WifiDirectController(context: Context) {
             ?: return
         if (peerId.isNotEmpty()) {
             _peerIds.value = _peerIds.value + (deviceAddress to peerId)
+            p2pPrefs.edit()
+                .putString("peer:$peerId", deviceAddress)
+                .putString("mac:$deviceAddress", peerId)
+                .apply()
+            Log.d(TAG, "Associated and persisted P2P mapping: peerId=$peerId <-> deviceAddress=$deviceAddress")
         }
+    }
+
+    fun getRememberedMacForPeer(peerId: String): String? {
+        return p2pPrefs.getString("peer:$peerId", null)
+    }
+
+    fun getRememberedPeerForMac(deviceAddress: String): String? {
+        return p2pPrefs.getString("mac:$deviceAddress", null)
+    }
+
+    /** Excludes non-mobile appliances (PCs, TVs, streaming sticks) from automated P2P connections. */
+    fun isBlacklistedDevice(name: String): Boolean {
+        val upper = name.uppercase()
+        return upper.startsWith("DESKTOP-") ||
+               upper.startsWith("LAPTOP-") ||
+               upper.startsWith("DIRECT-") ||
+               upper.contains("BRAVIA") ||
+               upper.contains("TV") ||
+               upper.contains("ROKU") ||
+               upper.contains("CHROMECAST") ||
+               upper.contains("PROJECTOR")
+    }
+
+    /**
+     * Deterministically calculates Group Owner Intent (15 vs 0) between this device and target peer.
+     * When both devices calculate intents symmetrically, one will always be 15 and the other 0,
+     * allowing zero-touch mutual Wi-Fi Direct WPS PBC negotiation without tie-breaker collisions.
+     */
+    fun calculateGoIntent(targetMac: String, myPeerId: String = "", targetPeerId: String = ""): Int {
+        val myMac = myDeviceAddress.orEmpty()
+        return if (myMac.isNotEmpty() && targetMac.isNotEmpty() && myMac != targetMac) {
+            if (myMac >= targetMac) 15 else 0
+        } else if (myPeerId.isNotEmpty() && targetPeerId.isNotEmpty() && myPeerId != targetPeerId) {
+            if (myPeerId >= targetPeerId) 15 else 0
+        } else {
+            15
+        }
+    }
+
+    /** Automatically connects to the designated Wi-Fi Direct peer with specified GO intent. */
+    fun autoConnectToPeer(peer: WifiP2pDevice, preferredIntent: Int = 15): Boolean {
+        if (!hasRequiredPermission() || peer.deviceAddress.isBlank()) return false
+        if (_connectionState.value.isConnected || _connectionState.value.isConnecting) return false
+
+        val now = System.currentTimeMillis()
+        if (connectingTargetAddress == peer.deviceAddress && (now - lastConnectAttemptTimestamp) < 6000L) {
+            return false
+        }
+
+        lastConnectAttemptTimestamp = now
+        connectingTargetAddress = peer.deviceAddress
+        selectedPeerAddress = peer.deviceAddress
+
+        Log.d(TAG, "Initiating auto-connect to ${peer.deviceName} (${peer.deviceAddress}) with GO intent $preferredIntent")
+        _connectionState.value = _connectionState.value.copy(
+            isDiscovering = false,
+            isConnecting = true
+        )
+
+        val config = WifiP2pConfig().apply {
+            deviceAddress = peer.deviceAddress
+            wps.setup = WpsInfo.PBC
+            groupOwnerIntent = preferredIntent
+        }
+
+        wifiP2pManager.connect(channel, config, object : WifiP2pManager.ActionListener {
+            override fun onSuccess() {
+                Log.d(TAG, "Wi-Fi Direct connect initiation accepted for ${peer.deviceAddress}")
+            }
+
+            override fun onFailure(reason: Int) {
+                Log.w(TAG, "Wi-Fi Direct connect to ${peer.deviceAddress} failed: $reason")
+                _connectionState.value = _connectionState.value.copy(isConnecting = false)
+                connectingTargetAddress = null
+                // Restart discovery so peers remain visible after transient connect failures
+                startPeerDiscovery()
+            }
+        })
+        return true
     }
 
     private fun requestConnectionInfo() {
@@ -201,6 +324,7 @@ class WifiDirectController(context: Context) {
     }
 
     private fun resetConnectionState() {
+        connectingTargetAddress = null
         _connectionState.value = WifiDirectConnectionState()
     }
 

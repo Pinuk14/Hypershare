@@ -18,11 +18,13 @@ import com.hypershare.model.PeerMode
 import com.hypershare.model.PeerStatus
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.asSharedFlow
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import java.net.DatagramPacket
 import java.net.DatagramSocket
@@ -38,6 +40,8 @@ class DiscoveryService : Service() {
     private var nsdManager: NsdManager? = null
     private var multicastLock: WifiManager.MulticastLock? = null
     private var udpSocket: DatagramSocket? = null
+    private var udpJob: Job? = null
+    private var reaperJob: Job? = null
 
     private var registrationListener: NsdManager.RegistrationListener? = null
     private var discoveryListener: NsdManager.DiscoveryListener? = null
@@ -72,7 +76,8 @@ class DiscoveryService : Service() {
             }
         } catch (e: Exception) { }
 
-        localServiceName = "HyperShare_${UserIdentityManager.getInstance(this).getUsername().replace(" ", "_")}"
+        val myId = UserIdentityManager.getInstance(this).getPeerId()
+        localServiceName = "HyperShare_${myId}"
         startForegroundNotification()
     }
 
@@ -94,17 +99,29 @@ class DiscoveryService : Service() {
             registerMdnsService()
             discoverMdnsServices()
             startUdpLanBroadcastPing()
+            startPeerLivenessReaper()
         }
     }
 
     fun refreshDiscovery() {
+        val oldPeers = activePeers.values.toList()
         activePeers.clear()
+        serviceScope.launch {
+            for (p in oldPeers) {
+                _discoveryEventsFlow.emit(PeerDiscoveryEvent.PeerLost(p.peerId))
+            }
+        }
         stopDiscovery()
         startDiscovery(PeerMode.MODE_1_WIFI)
         sendSubnetUdpPings()
     }
 
     fun stopDiscovery() {
+        sendSubnetUdpBye()
+        udpJob?.cancel()
+        udpJob = null
+        reaperJob?.cancel()
+        reaperJob = null
         registrationListener?.let {
             try { nsdManager?.unregisterService(it) } catch (e: Exception) { }
             registrationListener = null
@@ -114,13 +131,20 @@ class DiscoveryService : Service() {
             discoveryListener = null
         }
         try { udpSocket?.close() } catch (e: Exception) { }
+        udpSocket = null
     }
 
     private fun registerMdnsService() {
+        val myId = UserIdentityManager.getInstance(this).getPeerId()
+        val myName = UserIdentityManager.getInstance(this).getUsername()
         val serviceInfo = NsdServiceInfo().apply {
             serviceName = localServiceName
             serviceType = SERVICE_TYPE
             port = DEFAULT_PORT
+            try {
+                setAttribute("peerId", myId)
+                setAttribute("name", myName)
+            } catch (_: Exception) {}
         }
 
         registrationListener = object : NsdManager.RegistrationListener {
@@ -140,18 +164,33 @@ class DiscoveryService : Service() {
             override fun onDiscoveryStarted(regType: String) {}
 
             override fun onServiceFound(service: NsdServiceInfo) {
+                val myId = UserIdentityManager.getInstance(this@DiscoveryService).getPeerId()
                 // Filter own service even if mDNS appends a suffix like "_2" or "_(2)"
-                val isOwnService = service.serviceName.startsWith(localServiceName)
+                val isOwnService = service.serviceName.startsWith(localServiceName) ||
+                                   service.serviceName.contains(myId)
                 if (service.serviceType.startsWith(SERVICE_TYPE_PREFIX) && !isOwnService) {
                     queueResolve(service)
                 }
             }
 
             override fun onServiceLost(service: NsdServiceInfo) {
-                val peerId = service.serviceName
-                activePeers.remove(peerId)
+                val sName = service.serviceName
+                val cleanName = sName.removePrefix("HyperShare_").lowercase().replace(Regex("[^a-z0-9]"), "")
+                val matchingPeers = activePeers.values.filter { peer ->
+                    peer.peerId == sName ||
+                    peer.peerId == sName.removePrefix("HyperShare_") ||
+                    peer.displayName.lowercase().replace(Regex("[^a-z0-9]"), "") == cleanName
+                }
+                for (p in matchingPeers) {
+                    activePeers.remove(p.peerId)
+                    serviceScope.launch {
+                        _discoveryEventsFlow.emit(PeerDiscoveryEvent.PeerLost(p.peerId))
+                    }
+                }
+                val fallbackId = sName.removePrefix("HyperShare_")
+                activePeers.remove(fallbackId)
                 serviceScope.launch {
-                    _discoveryEventsFlow.emit(PeerDiscoveryEvent.PeerLost(peerId))
+                    _discoveryEventsFlow.emit(PeerDiscoveryEvent.PeerLost(fallbackId))
                 }
             }
 
@@ -191,23 +230,53 @@ class DiscoveryService : Service() {
 
             override fun onServiceResolved(serviceInfo: NsdServiceInfo) {
                 isResolving.set(false)
-                val peerId = serviceInfo.serviceName
-                val host = serviceInfo.host
                 val myPeerId = UserIdentityManager.getInstance(this@DiscoveryService).getPeerId()
 
-                if (host != null && !isLocalDeviceAddress(host) && peerId != myPeerId && !peerId.startsWith(localServiceName)) {
-                    val peer = ConnectedPeer(
-                        peerId = peerId,
-                        displayName = peerId.replace("HyperShare_", "").replace("_", " "),
-                        ipAddress = host,
-                        port = serviceInfo.port,
-                        status = PeerStatus.DISCOVERED,
-                        mode = PeerMode.MODE_1_WIFI,
-                        lastSeenTimestamp = System.currentTimeMillis()
-                    )
-                    activePeers[peerId] = peer
-                    serviceScope.launch {
-                        _discoveryEventsFlow.emit(PeerDiscoveryEvent.PeerDiscovered(peer))
+                // Extract cryptographic peerId from TXT record attribute or service name
+                val peerId = try {
+                    serviceInfo.attributes["peerId"]?.let { String(it, Charsets.UTF_8) }
+                } catch (_: Exception) { null }
+                    ?: serviceInfo.serviceName.removePrefix("HyperShare_")
+
+                val displayName = try {
+                    serviceInfo.attributes["name"]?.let { String(it, Charsets.UTF_8) }
+                } catch (_: Exception) { null }
+                    ?: peerId.take(12)
+
+                val myName = UserIdentityManager.getInstance(this@DiscoveryService).getUsername()
+                val host = serviceInfo.host
+
+                val isSelf = host == null ||
+                        isLocalDeviceAddress(host) ||
+                        peerId == myPeerId ||
+                        displayName.trim().equals(myName.trim(), ignoreCase = true) ||
+                        serviceInfo.serviceName.startsWith(localServiceName)
+
+                if (!isSelf && host != null) {
+                    // Check if an active peer already exists with this exact IP
+                    val existingPeer = activePeers.values.find { it.ipAddress?.hostAddress == host.hostAddress }
+                    val isExistingRealId = existingPeer != null && (existingPeer.peerId.length >= 16 || existingPeer.peerId.startsWith("peer-"))
+
+                    // If existing peer on same IP has genuine cryptographic ID, do not override with mDNS suffix
+                    if (!isExistingRealId) {
+                        // Remove old entry if key changed
+                        if (existingPeer != null && existingPeer.peerId != peerId) {
+                            activePeers.remove(existingPeer.peerId)
+                        }
+
+                        val peer = ConnectedPeer(
+                            peerId = peerId,
+                            displayName = displayName,
+                            ipAddress = host,
+                            port = serviceInfo.port,
+                            status = PeerStatus.DISCOVERED,
+                            mode = PeerMode.MODE_1_WIFI,
+                            lastSeenTimestamp = System.currentTimeMillis()
+                        )
+                        activePeers[peerId] = peer
+                        serviceScope.launch {
+                            _discoveryEventsFlow.emit(PeerDiscoveryEvent.PeerDiscovered(peer))
+                        }
                     }
                 }
                 drainResolveQueue()  // resolve next queued service
@@ -215,8 +284,26 @@ class DiscoveryService : Service() {
         })
     }
 
+    private fun startPeerLivenessReaper() {
+        reaperJob?.cancel()
+        reaperJob = serviceScope.launch {
+            while (isActive) {
+                delay(2000L)
+                val now = System.currentTimeMillis()
+                val expiredPeers = activePeers.values.filter { peer ->
+                    now - peer.lastSeenTimestamp > PEER_OFFLINE_TIMEOUT_MS
+                }
+                for (peer in expiredPeers) {
+                    activePeers.remove(peer.peerId)
+                    _discoveryEventsFlow.emit(PeerDiscoveryEvent.PeerLost(peer.peerId))
+                }
+            }
+        }
+    }
+
     private fun startUdpLanBroadcastPing() {
-        serviceScope.launch {
+        udpJob?.cancel()
+        udpJob = serviceScope.launch {
             try {
                 if (udpSocket == null || udpSocket?.isClosed == true) {
                     udpSocket = DatagramSocket(UDP_PORT).apply { broadcast = true }
@@ -225,12 +312,25 @@ class DiscoveryService : Service() {
                 // Subnet packet receiver loop
                 launch {
                     val buffer = ByteArray(1024)
-                    while (udpSocket?.isClosed == false) {
+                    while (isActive && udpSocket?.isClosed == false) {
                         try {
                             val packet = DatagramPacket(buffer, buffer.size)
                             udpSocket?.receive(packet)
                             val message = String(packet.data, 0, packet.length, Charsets.UTF_8)
-                            if (message.startsWith("HYPERSHARE_PING:")) {
+                            if (message.startsWith("HYPERSHARE_BYE:")) {
+                                val peerId = message.removePrefix("HYPERSHARE_BYE:").trim()
+                                val senderIp = packet.address?.hostAddress
+                                val matchingPeers = activePeers.values.filter {
+                                    it.peerId == peerId ||
+                                    (senderIp != null && it.ipAddress?.hostAddress == senderIp)
+                                }
+                                for (p in matchingPeers) {
+                                    activePeers.remove(p.peerId)
+                                    _discoveryEventsFlow.emit(PeerDiscoveryEvent.PeerLost(p.peerId))
+                                }
+                                activePeers.remove(peerId)
+                                _discoveryEventsFlow.emit(PeerDiscoveryEvent.PeerLost(peerId))
+                            } else if (message.startsWith("HYPERSHARE_PING:")) {
                                 val parts = message.split(":")
                                 if (parts.size >= 3) {
                                     val peerId = parts[1]
@@ -238,7 +338,19 @@ class DiscoveryService : Service() {
                                     val senderIp = packet.address
 
                                     val myPeerId = UserIdentityManager.getInstance(this@DiscoveryService).getPeerId()
-                                    if (peerId != myPeerId && !isLocalDeviceAddress(senderIp)) {
+                                    val myName = UserIdentityManager.getInstance(this@DiscoveryService).getUsername()
+
+                                    val isSelf = peerId == myPeerId ||
+                                            displayName.trim().equals(myName.trim(), ignoreCase = true) ||
+                                            isLocalDeviceAddress(senderIp)
+
+                                    if (!isSelf && senderIp != null) {
+                                        // Remove any existing transient mDNS peer on this exact IP
+                                        val existing = activePeers.values.find { it.ipAddress?.hostAddress == senderIp.hostAddress }
+                                        if (existing != null && existing.peerId != peerId) {
+                                            activePeers.remove(existing.peerId)
+                                        }
+
                                         val peer = ConnectedPeer(
                                             peerId = peerId,
                                             displayName = displayName,
@@ -250,9 +362,6 @@ class DiscoveryService : Service() {
                                         )
 
                                         activePeers[peerId] = peer
-                                        serviceScope.launch(Dispatchers.IO) {
-                                            com.hypershare.db.MessageRepository(applicationContext).savePeer(peerId, displayName)
-                                        }
                                         _discoveryEventsFlow.emit(PeerDiscoveryEvent.PeerDiscovered(peer))
                                     }
                                 }
@@ -262,12 +371,22 @@ class DiscoveryService : Service() {
                 }
 
                 // Periodic UDP broadcast loop (every 2 seconds)
-                while (udpSocket?.isClosed == false) {
+                while (isActive && udpSocket?.isClosed == false) {
                     sendSubnetUdpPings()
                     delay(2000L)
                 }
             } catch (e: Exception) { }
         }
+    }
+
+    private fun sendSubnetUdpBye() {
+        try {
+            val myPeerId = UserIdentityManager.getInstance(this).getPeerId()
+            val byeMessage = "HYPERSHARE_BYE:$myPeerId"
+            val bytes = byeMessage.toByteArray(Charsets.UTF_8)
+            val globalBroadcast = DatagramPacket(bytes, bytes.size, InetAddress.getByName("255.255.255.255"), UDP_PORT)
+            udpSocket?.send(globalBroadcast)
+        } catch (_: Exception) {}
     }
 
     private fun sendSubnetUdpPings() {
@@ -326,6 +445,20 @@ class DiscoveryService : Service() {
     private fun isLocalDeviceAddress(address: InetAddress?): Boolean {
         if (address == null) return true
         if (address.isLoopbackAddress || address.isAnyLocalAddress) return true
+
+        // 1. Direct Wi-Fi interface IP check
+        try {
+            val wifiManager = applicationContext.getSystemService(Context.WIFI_SERVICE) as? WifiManager
+            val ipInt = wifiManager?.connectionInfo?.ipAddress ?: 0
+            if (ipInt != 0) {
+                val wifiIp = android.text.format.Formatter.formatIpAddress(ipInt)
+                if (address.hostAddress == wifiIp) {
+                    return true
+                }
+            }
+        } catch (_: Exception) { }
+
+        // 2. All system network interfaces check
         try {
             val interfaces = NetworkInterface.getNetworkInterfaces() ?: return false
             while (interfaces.hasMoreElements()) {
@@ -347,5 +480,6 @@ class DiscoveryService : Service() {
         const val SERVICE_TYPE_PREFIX = "_hypershare"
         const val DEFAULT_PORT = 47200
         const val UDP_PORT = 47201
+        const val PEER_OFFLINE_TIMEOUT_MS = 6000L
     }
 }

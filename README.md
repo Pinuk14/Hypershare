@@ -48,14 +48,17 @@ HyperShare runs on the Android phone already in your pocket, requires no setup b
 
 ## Features
 
-- **Peer discovery** — finds other HyperShare devices automatically, no IP addresses needed
-- **End-to-end encrypted messaging** — AES-256-GCM with ECDH key exchange; relay nodes cannot read the content they forward
-- **High-speed file transfer** — chunked transfer with CRC32 integrity verification and sliding-window ACKs
-- **Media streaming** — stream video/audio directly to another device without saving to disk
-- **Permission control** — share files as VIEW_ONLY (no download allowed) or DOWNLOADABLE
-- **Multi-hop routing** — messages traverse devices that are out of direct radio range
-- **Automatic mode switching** — detects infrastructure loss and switches to mesh without user action
-- **Works offline** — zero internet dependency, zero cloud, zero servers
+- **Peer Discovery** — finds other HyperShare devices automatically via mDNS/UDP on LAN or Wi-Fi Direct in Disaster Mode
+- **Wi-Fi Direct P2P Mesh (SIH Prototype)** — direct device-to-device discovery, client-to-GO socket formation, and encrypted HELLO handshake without any router or infrastructure
+- **End-to-End Encrypted Messaging** — AES-256-GCM with ECDH key exchange; relay nodes cannot read content they forward
+- **Contact-Gated Mutual Trust** — camera and gallery QR code identity exchange, device-stable identity (`BLAKE2b-256`), and Ed25519 cryptographic signatures
+- **Permanent & Temporary Group Communication** — multi-peer group chatrooms, O(N) direct packet distribution, 3-stage delivery ticks (Sent, Delivered, Read), and deterministic avatar stacks
+- **High-Speed File Transfer** — chunked transfer with CRC32 integrity verification and sliding-window ACKs
+- **Media Streaming** — stream video/audio directly to another device without saving to disk
+- **Permission Control** — share files as VIEW_ONLY (no download allowed) or DOWNLOADABLE
+- **Multi-Hop Routing** — messages traverse devices that are out of direct radio range
+- **Automatic Mode Switching** — detects infrastructure loss and switches to emergency mesh seamlessly
+- **Works Offline** — zero internet dependency, zero cloud, zero servers
 
 ---
 
@@ -93,7 +96,7 @@ HyperShare runs on the Android phone already in your pocket, requires no setup b
 └──────────────────────────────────────────┘
 ```
 
-Full detail: [`Architecture.md`](./Architecture.md)
+Full detail: [`Architecture.md`](./docs/Architecture.md)
 
 ---
 
@@ -119,7 +122,7 @@ HyperShare uses an **AODV-inspired on-demand routing protocol**:
 
 Routes are cached in a `RoutingTable` with 30-second expiry and pruned continuously. Max hop count: 8.
 
-Full detail: [`Mesh_Routing_Logic.md`](./Mesh_Routing_Logic.md)
+Full detail: [`Mesh_Routing_Logic.md`](./docs/Mesh_Routing_Logic.md)
 
 ---
 
@@ -144,7 +147,7 @@ Key design decisions:
 - **64 KB chunk size** for file transfer, calibrated for low-RAM Android devices
 - **28-byte encryption overhead** per packet (12 IV + 16 GCM tag)
 
-Full specification: [`Protocol_Specs.md`](./Protocol_Specs.md)
+Full specification: [`Protocol_Specs.md`](./docs/Protocol_Specs.md)
 
 ---
 
@@ -152,12 +155,14 @@ Full specification: [`Protocol_Specs.md`](./Protocol_Specs.md)
 
 | File | Contents |
 |---|---|
-| [`Architecture.md`](./Architecture.md) | Android module breakdown, data flows, threading model, dependencies |
-| [`Workflow.md`](./Workflow.md) | Week-by-week 24-week development plan with milestones and risk register |
-| [`Theme.md`](./Theme.md) | UI design language — color palette, typography, glassmorphism spec, animation rules |
-| [`Mesh_Routing_Logic.md`](./Mesh_Routing_Logic.md) | Peer discovery, GO election scoring, AODV routing, route maintenance |
-| [`Protocol_Specs.md`](./Protocol_Specs.md) | Binary protocol — every packet type, header fields, byte offsets, encryption envelope |
-| [`Testing_Scenarios.md`](./Testing_Scenarios.md) | Physical and software test plans for both modes, performance benchmarks |
+| [`Architecture.md`](./docs/Architecture.md) | Android module breakdown, data flows, threading model, dependencies |
+| [`Workflow.md`](./docs/Workflow.md) | Week-by-week 24-week development plan with milestones and risk register |
+| [`Theme.md`](./docs/Theme.md) | UI design language — color palette, typography, glassmorphism spec, animation rules |
+| [`Mesh_Routing_Logic.md`](./docs/Mesh_Routing_Logic.md) | Peer discovery, GO election scoring, AODV routing, route maintenance |
+| [`Protocol_Specs.md`](./docs/Protocol_Specs.md) | Binary protocol — every packet type, header fields, byte offsets, encryption envelope |
+| [`Testing_Scenarios.md`](./docs/Testing_Scenarios.md) | Physical and software test plans for both modes, performance benchmarks |
+| [`Running_Steps.md`](./docs/Running_Steps.md) | Step-by-step device deployment, USB debugging, ADB pairing, and test execution |
+| [`Bug_Log.md`](./docs/Bug_Log.md) | Production bug register, SLA severity classifications, and resolved issues |
 
 ---
 
@@ -202,10 +207,10 @@ adb install app/build/outputs/apk/debug/app-debug.apk
 
 ### First Launch
 
-1. Grant all requested permissions — **Location permission is mandatory** for WiFi Direct peer discovery on Android 10+. This is a platform requirement.
+1. Grant all requested permissions — **Nearby Devices (`NEARBY_WIFI_DEVICES`) on Android 13+ or Location (`ACCESS_FINE_LOCATION`) on Android 10–12** is mandatory for Wi-Fi Direct peer discovery and local networking.
 2. The app defaults to Mode 1 (WiFi LAN). Connect all devices to the same WiFi network.
 3. Peers appear automatically in the Peer List within 10 seconds.
-4. To test Mode 2, tap the mode toggle → Disaster Mesh, or simply disconnect from the router and let the app auto-switch.
+4. To test Mode 2 (Disaster Mesh), tap **EMERGENCY MODE** on the Home screen to trigger Wi-Fi Direct scanning and group formation.
 
 ### Enabling ADB Logging
 
@@ -230,24 +235,27 @@ See [`Testing_Scenarios.md`](./Testing_Scenarios.md) for the full test plan. The
 ```
 hypershare/
 ├── app/
-│   ├── src/main/
-│   │   ├── java/com/hypershare/
-│   │   │   ├── ui/                  # Jetpack Compose screens + ViewModels
-│   │   │   ├── service/             # Foreground services
-│   │   │   ├── routing/             # RoutingEngine, RoutingTable, HopManager
-│   │   │   ├── protocol/            # PacketBuilder, PacketParser, ChunkManager
-│   │   │   ├── security/            # ECDH, AES-GCM, PeerKeyStore
-│   │   │   ├── session/             # SessionManager, TransferQueue, StreamController
-│   │   │   └── model/               # Shared data classes
-│   │   └── res/
-│   └── build.gradle
-├── Architecture.md
-├── Workflow.md
-├── Theme.md
-├── Mesh_Routing_Logic.md
-├── Protocol_Specs.md
-├── Testing_Scenarios.md
-└── README.md
+│   └── src/main/java/com/hypershare/
+│       ├── application/         # SessionManager, GroupManager, UserIdentityManager, TransferQueue
+│       ├── db/                  # SQLite ChatDatabaseHelper, MessageRepository, GroupRepository
+│       ├── identity/            # IdentityManager (Ed25519/BLAKE2b), ContactCard
+│       ├── model/               # Packet, ConnectedPeer, GroupModels, GroupInviteCard, RouteEntry
+│       ├── protocol/            # PacketBuilder, PacketParser, ChunkManager, ControlPacketHandler
+│       ├── routing/             # RoutingTable, HopManager, GroupOwnerElection, ModeController
+│       ├── security/            # EphemeralKeyPair (ECDH), SessionEncryptor (AES-GCM), PeerKeyStore, TofuManager
+│       ├── service/             # MeshNetworkService, DiscoveryService, LanSocketManager, WifiDirectController
+│       └── ui/                  # Jetpack Compose UI (chat, group, peerlist, home, settings, qrscanner)
+├── docs/                        # Specifications, bug log, and technical documentation
+│   ├── Architecture.md
+│   ├── Bug_Log.md
+│   ├── Mesh_Routing_Logic.md
+│   ├── Protocol_Specs.md
+│   ├── Running_Steps.md
+│   ├── Testing_Scenarios.md
+│   ├── Theme.md
+│   └── Workflow.md
+├── Filestructure.md             # AI Agent file structure index & change log
+└── README.md                    # Main project overview
 ```
 
 ---

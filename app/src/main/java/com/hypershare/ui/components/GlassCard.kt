@@ -10,14 +10,18 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 
-fun Modifier.glassCard(cornerRadius: Dp = 16.dp): Modifier = this
+fun Modifier.glassCard(
+    cornerRadius: Dp = 16.dp,
+    borderColor: Color = Color(0x14FFFFFF),
+    borderWidth: Dp = 1.dp
+): Modifier = this
     .background(
         color = Color(0x0DFFFFFF),  // 5% white overlay fill
         shape = RoundedCornerShape(cornerRadius)
     )
     .border(
-        width = 1.dp,
-        color = Color(0x14FFFFFF),  // 8% white rim border
+        width = borderWidth,
+        color = borderColor,
         shape = RoundedCornerShape(cornerRadius)
     )
 
@@ -25,10 +29,12 @@ fun Modifier.glassCard(cornerRadius: Dp = 16.dp): Modifier = this
 fun GlassCard(
     modifier: Modifier = Modifier,
     cornerRadius: Dp = 16.dp,
+    borderColor: Color = Color(0x14FFFFFF),
+    borderWidth: Dp = 1.dp,
     content: @Composable () -> Unit
 ) {
     Box(
-        modifier = modifier.glassCard(cornerRadius)
+        modifier = modifier.glassCard(cornerRadius, borderColor, borderWidth)
     ) {
         content()
     }

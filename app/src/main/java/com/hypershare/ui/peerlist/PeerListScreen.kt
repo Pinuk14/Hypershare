@@ -20,6 +20,7 @@ import androidx.compose.foundation.layout.windowInsetsTopHeight
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
@@ -35,10 +36,10 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import android.net.wifi.p2p.WifiP2pDevice
-import com.hypershare.model.ConnectedPeer
 import com.hypershare.model.PeerMode
 import com.hypershare.model.PeerStatus
 import com.hypershare.ui.components.AmbientMeshGraphCanvas
@@ -50,11 +51,9 @@ import com.hypershare.ui.components.StatusChipState
 import com.hypershare.ui.theme.BackgroundBase
 import com.hypershare.ui.theme.ConnectedGreen
 import com.hypershare.ui.theme.ErrorRed
-import com.hypershare.ui.theme.RelayPurple
 import com.hypershare.ui.theme.SignalBlue
 import com.hypershare.ui.theme.TextPrimary
 import com.hypershare.ui.theme.TextSecondary
-import com.hypershare.ui.theme.WarningAmber
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -73,36 +72,7 @@ fun PeerListScreen(
     val context = androidx.compose.ui.platform.LocalContext.current
 
     val isWifiDirectMode = uiState.currentMode == PeerMode.MODE_2_MESH
-    val wifiDirectPeersById = remember(uiState.wifiDirectPeers, uiState.wifiDirectPeerIds) {
-        uiState.wifiDirectPeers.associateBy { device ->
-            uiState.wifiDirectPeerIds[device.deviceAddress] ?: device.deviceAddress
-        }
-    }
-
-    // P2P mode deliberately shows only real Wi-Fi Direct devices, never demo peers.
-    val displayPeers = if (isWifiDirectMode) {
-        uiState.wifiDirectPeers.map { device ->
-            ConnectedPeer(
-                peerId = uiState.wifiDirectPeerIds[device.deviceAddress] ?: device.deviceAddress,
-                displayName = device.deviceName.ifBlank { device.deviceAddress },
-                status = when {
-                    uiState.wifiDirectConnection.isConnected -> PeerStatus.CONNECTED
-                    uiState.wifiDirectConnection.isConnecting -> PeerStatus.CONNECTING
-                    else -> PeerStatus.DISCOVERED
-                },
-                mode = PeerMode.MODE_2_MESH
-            )
-        }
-    } else if (uiState.peers.isNotEmpty()) {
-        uiState.peers
-    } else if (uiState.showDemoPeers) {
-            listOf(
-                ConnectedPeer("peer-1", "Device Alpha (LAN)", status = PeerStatus.CONNECTED, mode = PeerMode.MODE_1_WIFI),
-                ConnectedPeer("peer-2", "Device Beta (LAN)", status = PeerStatus.DISCOVERED, mode = PeerMode.MODE_1_WIFI)
-            )
-    } else {
-        emptyList()
-    }
+    val displayItems = uiState.conversationItems
 
     Scaffold(
         containerColor = BackgroundBase,
@@ -144,14 +114,14 @@ fun PeerListScreen(
                         .background(BackgroundBase)
                 )
 
-                // Glassmorphic Header Banner with Refresh Button
+                // Glassmorphic Header Banner with Mode Status & Refresh Button
                 GlassCard(
                     modifier = Modifier
                         .fillMaxWidth()
                         .padding(horizontal = 16.dp, vertical = 8.dp),
                     cornerRadius = 16.dp
                 ) {
-                    val totalUnreadCount = remember(context) {
+                    val totalUnreadCount = remember(context, displayItems) {
                         com.hypershare.db.MessageRepository(context).getTotalUnreadMessageCount()
                     }
 
@@ -185,7 +155,7 @@ fun PeerListScreen(
                                     contentAlignment = Alignment.Center
                                 ) {
                                     Text(
-                                        text = "$totalUnreadCount unread",
+                                        text = "$totalUnreadCount",
                                         color = Color.White,
                                         fontWeight = FontWeight.Bold,
                                         fontSize = 10.sp
@@ -219,12 +189,12 @@ fun PeerListScreen(
                 Spacer(modifier = Modifier.height(4.dp))
 
                 Text(
-                    text = if (!isWifiDirectMode) "● LOCAL NETWORK (mDNS LAN)" else "▲ WI-FI DIRECT PEER DISCOVERY",
+                    text = if (!isWifiDirectMode) "● LOCAL NETWORK CHATS (LAN)" else "▲ EMERGENCY MESH PEERS (P2P)",
                     color = if (!isWifiDirectMode) ConnectedGreen else ErrorRed,
                     fontWeight = FontWeight.Bold,
                     fontSize = 11.sp,
                     fontFamily = FontFamily.Monospace,
-                    modifier = Modifier.padding(bottom = 8.dp)
+                    modifier = Modifier.padding(bottom = 6.dp)
                 )
 
                 if (isWifiDirectMode) {
@@ -236,49 +206,18 @@ fun PeerListScreen(
                         }
                         connection.isConnecting -> "◌ CONNECTING TO WI-FI DIRECT DEVICE"
                         connection.isDiscovering -> "◌ SCANNING FOR WI-FI DIRECT DEVICES"
-                        else -> "○ WI-FI DIRECT READY"
+                        else -> "○ WI-FI DIRECT READY (MULTI-HOP ROUTING ACTIVE)"
                     }
                     Text(
                         text = connectionText,
                         color = if (connection.isConnected) ConnectedGreen else TextSecondary,
                         fontFamily = FontFamily.Monospace,
                         fontSize = 11.sp,
-                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)
+                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp)
                     )
-                } else {
-                    // Demo peers remain limited to the existing LAN view.
-                    GlassCard(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(horizontal = 16.dp, vertical = 4.dp)
-                            .clickable { viewModel.toggleShowDemoPeers() },
-                        cornerRadius = 12.dp
-                    ) {
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(horizontal = 14.dp, vertical = 8.dp),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Text(
-                                text = if (uiState.showDemoPeers) "● Demo Chat Rooms (Visible)" else "○ Real LAN Peers Only",
-                                color = TextSecondary,
-                                fontSize = 11.sp,
-                                fontFamily = FontFamily.Monospace
-                            )
-
-                            Text(
-                                text = if (uiState.showDemoPeers) "🗑 Clear Demo Rooms" else "↺ Restore Demo Rooms",
-                                color = SignalBlue,
-                                fontWeight = FontWeight.Bold,
-                                fontSize = 11.sp
-                            )
-                        }
-                    }
                 }
 
-                Spacer(modifier = Modifier.height(8.dp))
+                Spacer(modifier = Modifier.height(6.dp))
 
                 // Pull-to-Refresh Container for Swipe Down Gesture
                 PullToRefreshBox(
@@ -293,7 +232,7 @@ fun PeerListScreen(
                         .weight(1f)
                         .fillMaxWidth()
                 ) {
-                    if (displayPeers.isEmpty()) {
+                    if (displayItems.isEmpty()) {
                         Box(
                             modifier = Modifier
                                 .fillMaxSize()
@@ -304,7 +243,7 @@ fun PeerListScreen(
                                 Text("📡", fontSize = 38.sp)
                                 Spacer(modifier = Modifier.height(12.dp))
                                 Text(
-                                    text = "No Active Discovered Peers",
+                                    text = if (isWifiDirectMode) "No Emergency Contacts" else "No Local Network Devices",
                                     color = TextPrimary,
                                     fontWeight = FontWeight.Bold,
                                     fontSize = 16.sp
@@ -312,9 +251,9 @@ fun PeerListScreen(
                                 Spacer(modifier = Modifier.height(4.dp))
                                 Text(
                                     text = if (isWifiDirectMode) {
-                                        "Pull down to scan or tap '↻' above.\nEnable Wi-Fi Direct on both nearby devices."
+                                        "Only mutually accepted contacts can be messaged in Emergency Mode.\nExchange contact info via QR scanner or accept contacts in Local Mode."
                                     } else {
-                                        "Pull down to scan network or tap '↻' above.\nEnsure both devices share the same WiFi network."
+                                        "Pull down to scan network or tap '↻' above.\nEnsure devices are connected to the same Wi-Fi network."
                                     },
                                     color = TextSecondary,
                                     fontSize = 12.sp,
@@ -329,14 +268,14 @@ fun PeerListScreen(
                                 .padding(horizontal = 16.dp),
                             verticalArrangement = Arrangement.spacedBy(10.dp)
                         ) {
-                            items(displayPeers, key = { it.peerId }) { peer ->
-                                PeerGlassListItem(peer = peer, onClick = {
-                                    if (isWifiDirectMode) {
-                                        wifiDirectPeersById[peer.peerId]?.let(onWifiDirectPeerClick)
-                                    } else {
-                                        onPeerClick(peer.peerId)
+                            items(displayItems, key = { it.peerId }) { item ->
+                                PeerGlassListItem(
+                                    item = item,
+                                    isEmergencyMode = isWifiDirectMode,
+                                    onClick = {
+                                        onPeerClick(item.peerId)
                                     }
-                                })
+                                )
                             }
                         }
                     }
@@ -348,36 +287,45 @@ fun PeerListScreen(
 
 @Composable
 fun PeerGlassListItem(
-    peer: ConnectedPeer,
+    item: PeerUiItem,
+    isEmergencyMode: Boolean,
     onClick: () -> Unit
 ) {
-    val statusChipState = when (peer.status) {
-        PeerStatus.CONNECTED -> StatusChipState.CONNECTED
-        PeerStatus.RELAYING -> StatusChipState.RELAYING
-        PeerStatus.CONNECTING -> StatusChipState.CONNECTING
-        PeerStatus.DISCOVERED -> StatusChipState.WIFI
-        else -> StatusChipState.LOST
-    }
-
-    val avatarBorderColor = when (peer.status) {
-        PeerStatus.CONNECTED, PeerStatus.DISCOVERED -> ConnectedGreen
-        PeerStatus.RELAYING -> RelayPurple
-        PeerStatus.CONNECTING -> SignalBlue
-        else -> ErrorRed
-    }
-
-    val subtext = if (peer.ipAddress != null) {
-        "IP: ${peer.ipAddress.hostAddress}:${peer.port}"
+    // Green outline indicates the peer is currently online in the same local network.
+    // Discard online/offline status in Emergency mode only, keep in local mode.
+    val showGreenOutline = if (isEmergencyMode) {
+        false
     } else {
-        "ID: ${peer.peerId.take(12)}"
+        item.isOnlineOnLan
+    }
+
+    val cardBorderColor = if (showGreenOutline) ConnectedGreen else Color(0x14FFFFFF)
+    val cardBorderWidth = if (showGreenOutline) 1.5.dp else 1.dp
+
+    val formattedTime = remember(item.lastActivity) {
+        formatTimestamp(item.lastActivity)
+    }
+
+    val previewText = remember(item.lastMessageSnippet, item.isOnlineOnLan, isEmergencyMode) {
+        if (!item.lastMessageSnippet.isNullOrBlank()) {
+            item.lastMessageSnippet
+        } else if (isEmergencyMode) {
+            "Ready for Emergency Mesh Routing"
+        } else if (item.isOnlineOnLan) {
+            "Online on local network • ${item.ipAddress ?: ""}"
+        } else {
+            "Tap to open conversation"
+        }
     }
 
     GlassCard(
         modifier = Modifier
             .fillMaxWidth()
-            .height(72.dp)
+            .height(74.dp)
             .clickable { onClick() },
-        cornerRadius = 12.dp
+        cornerRadius = 14.dp,
+        borderColor = cardBorderColor,
+        borderWidth = cardBorderWidth
     ) {
         Row(
             modifier = Modifier
@@ -385,16 +333,16 @@ fun PeerGlassListItem(
                 .padding(horizontal = 14.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            // Avatar Circle with state-color border
+            // Clean, neutral avatar circle (conflicting colored avatar borders removed per design direction)
             Box(
                 modifier = Modifier
-                    .size(44.dp)
-                    .background(Color.Black, CircleShape)
-                    .border(2.dp, avatarBorderColor, CircleShape),
+                    .size(46.dp)
+                    .background(Color(0x1AFFFFFF), CircleShape)
+                    .border(1.dp, Color(0x22FFFFFF), CircleShape),
                 contentAlignment = Alignment.Center
             ) {
                 Text(
-                    text = peer.displayName.take(1).uppercase(),
+                    text = item.displayName.take(1).uppercase(),
                     color = TextPrimary,
                     fontWeight = FontWeight.Bold,
                     fontSize = 18.sp
@@ -403,58 +351,36 @@ fun PeerGlassListItem(
 
             Spacer(modifier = Modifier.width(14.dp))
 
-            val context = androidx.compose.ui.platform.LocalContext.current
-            val repository = remember { com.hypershare.db.MessageRepository(context) }
-            val isTrusted = remember(peer.peerId) { repository.isPeerTrusted(peer.peerId) }
-            val unreadCount = remember(peer.peerId) { repository.getUnreadMessageCountForPeer(peer.peerId) }
-            val lastMessage = remember(peer.peerId) { repository.getLastMessageForPeer(peer.peerId) }
-
-            val formattedTime = remember(lastMessage?.timestamp) {
-                if (lastMessage != null) {
-                    java.text.SimpleDateFormat("hh:mm a", java.util.Locale.getDefault()).format(java.util.Date(lastMessage.timestamp))
-                } else null
-            }
-
-            val previewText = remember(lastMessage, subtext) {
-                if (lastMessage != null) {
-                    val prefix = if (lastMessage.isOutgoing) "You: " else ""
-                    prefix + lastMessage.text
-                } else {
-                    if (isTrusted) {
-                        "Verified Contact • $subtext"
-                    } else {
-                        val network = if (peer.mode == PeerMode.MODE_2_MESH) "Wi-Fi Direct" else "LAN"
-                        "Discovered $network • $subtext"
-                    }
-                }
-            }
-
             Column(
                 modifier = Modifier.weight(1f)
             ) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Text(
-                        text = peer.displayName,
+                        text = item.displayName,
                         color = TextPrimary,
                         fontWeight = FontWeight.Bold,
                         fontSize = 15.sp,
-                        maxLines = 1
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
                     )
-                    Spacer(modifier = Modifier.width(6.dp))
-                    if (isTrusted) {
-                        Text("• Verified", color = ConnectedGreen, fontSize = 10.sp, fontWeight = FontWeight.Bold)
-                    } else {
-                        Text("• Discovered", color = WarningAmber, fontSize = 10.sp)
+                    if (item.isTrusted) {
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text(
+                            text = "✓",
+                            color = ConnectedGreen,
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.Black
+                        )
                     }
                 }
-                Spacer(modifier = Modifier.height(2.dp))
+                Spacer(modifier = Modifier.height(3.dp))
                 Text(
                     text = previewText,
-                    color = if (unreadCount > 0) TextPrimary else TextSecondary,
-                    fontWeight = if (unreadCount > 0) FontWeight.SemiBold else FontWeight.Normal,
-                    fontSize = 11.sp,
+                    color = if (item.unreadCount > 0) TextPrimary else TextSecondary,
+                    fontWeight = if (item.unreadCount > 0) FontWeight.SemiBold else FontWeight.Normal,
+                    fontSize = 12.sp,
                     maxLines = 1,
-                    fontFamily = FontFamily.Monospace
+                    overflow = TextOverflow.Ellipsis
                 )
             }
 
@@ -462,40 +388,55 @@ fun PeerGlassListItem(
                 horizontalAlignment = Alignment.End,
                 verticalArrangement = Arrangement.Center
             ) {
-                if (formattedTime != null) {
+                if (formattedTime.isNotEmpty()) {
                     Text(
                         text = formattedTime,
-                        color = if (unreadCount > 0) SignalBlue else TextSecondary,
-                        fontSize = 10.sp,
-                        fontFamily = FontFamily.Monospace
+                        color = if (item.unreadCount > 0) ConnectedGreen else TextSecondary,
+                        fontSize = 11.sp,
+                        fontFamily = FontFamily.Monospace,
+                        fontWeight = if (item.unreadCount > 0) FontWeight.Bold else FontWeight.Normal
                     )
-                    Spacer(modifier = Modifier.height(4.dp))
+                    Spacer(modifier = Modifier.height(6.dp))
                 }
 
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    if (unreadCount > 0) {
+                    if (item.unreadCount > 0) {
                         Box(
                             modifier = Modifier
-                                .background(SignalBlue, CircleShape)
+                                .background(ConnectedGreen, CircleShape)
                                 .padding(horizontal = 7.dp, vertical = 2.dp),
                             contentAlignment = Alignment.Center
                         ) {
                             Text(
-                                text = if (unreadCount > 99) "99+" else unreadCount.toString(),
-                                color = Color.White,
-                                fontWeight = FontWeight.Bold,
+                                text = if (item.unreadCount > 99) "99+" else item.unreadCount.toString(),
+                                color = Color.Black,
+                                fontWeight = FontWeight.Black,
                                 fontSize = 10.sp
                             )
                         }
-                        Spacer(modifier = Modifier.width(6.dp))
                     }
 
-                    StatusChip(
-                        state = statusChipState,
-                        hopCount = peer.hopCount
-                    )
                 }
             }
+        }
+    }
+}
+
+private fun formatTimestamp(timestamp: Long): String {
+    if (timestamp <= 0L) return ""
+    val now = System.currentTimeMillis()
+    val diff = now - timestamp
+    val oneDay = 24 * 60 * 60 * 1000L
+
+    return when {
+        diff < oneDay -> {
+            java.text.SimpleDateFormat("h:mm a", java.util.Locale.getDefault()).format(java.util.Date(timestamp))
+        }
+        diff < 7 * oneDay -> {
+            java.text.SimpleDateFormat("EEE", java.util.Locale.getDefault()).format(java.util.Date(timestamp))
+        }
+        else -> {
+            java.text.SimpleDateFormat("MMM d", java.util.Locale.getDefault()).format(java.util.Date(timestamp))
         }
     }
 }

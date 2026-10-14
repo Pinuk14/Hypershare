@@ -9,6 +9,10 @@ class MessageRepository(context: Context) {
 
     private val dbHelper = ChatDatabaseHelper(context)
 
+    init {
+        cleanupGhostAndDemoData()
+    }
+
     fun getMessagesForPeer(peerId: String): List<ChatMessageItem> {
         val messages = mutableListOf<ChatMessageItem>()
         val db = dbHelper.readableDatabase
@@ -265,4 +269,173 @@ class MessageRepository(context: Context) {
         }
         return null
     }
+
+    fun cleanupDemoData() = cleanupGhostAndDemoData()
+
+    fun cleanupGhostAndDemoData(myPeerId: String? = null, myUsername: String? = null) {
+        try {
+            val db = dbHelper.writableDatabase
+            // Delete demo peers
+            db.delete("messages", "peer_id IN ('peer-1', 'peer-2', 'demo-peer-1', 'demo-peer-2')", null)
+            db.delete("peers", "peer_id IN ('peer-1', 'peer-2', 'demo-peer-1', 'demo-peer-2')", null)
+
+            // Delete self if it got inserted into peers table
+            if (!myPeerId.isNullOrBlank()) {
+                db.delete("peers", "peer_id = ? OR peer_id = 'local'", arrayOf(myPeerId))
+            }
+            if (!myUsername.isNullOrBlank()) {
+                val cleanUser = myUsername.lowercase().replace(Regex("[^a-z0-9]"), "")
+                db.delete(
+                    "peers",
+                    "REPLACE(REPLACE(REPLACE(LOWER(display_name), '_', ''), ' ', ''), '-', '') = ?",
+                    arrayOf(cleanUser)
+                )
+            }
+            if (!myPeerId.isNullOrBlank()) {
+                db.delete("messages", "peer_id = ? OR peer_id = 'local'", arrayOf(myPeerId))
+            }
+
+            // Delete mDNS ghost peers that have parentheses or spaces in peer_id or display_name and no messages
+            db.delete(
+                "peers",
+                "peer_id NOT IN (SELECT DISTINCT peer_id FROM messages) AND (peer_id LIKE '%(%' OR display_name LIKE '%(%' OR peer_id LIKE 'HyperShare_%' OR peer_id LIKE '% %')",
+                null
+            )
+
+            // Delete temporary/ghost Wi-Fi Direct and Windows Miracast peers from previous tests
+            db.delete(
+                "peers",
+                "peer_id LIKE 'Android_%' OR display_name LIKE 'Android_%' OR " +
+                "peer_id LIKE 'DESKTOP-%' OR display_name LIKE 'DESKTOP-%' OR " +
+                "peer_id LIKE 'LAPTOP-%' OR display_name LIKE 'LAPTOP-%' OR " +
+                "peer_id GLOB '[0-9a-fA-F][0-9a-fA-F]:[0-9a-fA-F][0-9a-fA-F]:*' OR " +
+                "display_name GLOB '[0-9a-fA-F][0-9a-fA-F]:[0-9a-fA-F][0-9a-fA-F]:*'",
+                null
+            )
+            db.delete(
+                "messages",
+                "peer_id LIKE 'Android_%' OR " +
+                "peer_id LIKE 'DESKTOP-%' OR " +
+                "peer_id LIKE 'LAPTOP-%' OR " +
+                "peer_id GLOB '[0-9a-fA-F][0-9a-fA-F]:[0-9a-fA-F][0-9a-fA-F]:*'",
+                null
+            )
+
+            // Migrate messages from legacy short mDNS peer_ids (e.g. Vivo_I2302) to genuine cryptographic peer ID if both exist
+            db.execSQL("""
+                UPDATE messages 
+                SET peer_id = (
+                    SELECT p2.peer_id FROM peers p2 
+                    WHERE (LENGTH(p2.peer_id) >= 16 OR p2.peer_id LIKE 'peer-%')
+                      AND REPLACE(REPLACE(LOWER(p2.display_name), '_', ''), ' ', '') = REPLACE(REPLACE(LOWER(messages.peer_id), '_', ''), ' ', '')
+                    LIMIT 1
+                )
+                WHERE LENGTH(peer_id) < 16
+                  AND NOT peer_id LIKE 'peer-%'
+                  AND EXISTS (
+                      SELECT 1 FROM peers p2 
+                      WHERE (LENGTH(p2.peer_id) >= 16 OR p2.peer_id LIKE 'peer-%')
+                        AND REPLACE(REPLACE(LOWER(p2.display_name), '_', ''), ' ', '') = REPLACE(REPLACE(LOWER(messages.peer_id), '_', ''), ' ', '')
+                  )
+            """.trimIndent())
+
+            // Delete legacy short mDNS peer_ids when a genuine cryptographic peer ID exists for the same device
+            db.execSQL("""
+                DELETE FROM peers 
+                WHERE LENGTH(peer_id) < 16
+                  AND NOT peer_id LIKE 'peer-%'
+                  AND EXISTS (
+                      SELECT 1 FROM peers p2 
+                      WHERE (LENGTH(p2.peer_id) >= 16 OR p2.peer_id LIKE 'peer-%')
+                        AND REPLACE(REPLACE(LOWER(p2.display_name), '_', ''), ' ', '') = REPLACE(REPLACE(LOWER(peers.display_name), '_', ''), ' ', '')
+                  )
+            """.trimIndent())
+        } catch (_: Exception) {}
+    }
+
+    fun getAllConversations(myPeerId: String = ""): List<PeerConversation> {
+        val conversations = mutableListOf<PeerConversation>()
+        val db = dbHelper.readableDatabase
+
+        // Ensure any peer with recorded messages is also indexed in the peers table (excluding self and demo)
+        val syncQuery = """
+            INSERT OR IGNORE INTO peers (peer_id, display_name, last_seen, is_trusted, has_peer_accepted)
+            SELECT DISTINCT m.peer_id, m.peer_id, MAX(m.timestamp), 0, 0
+            FROM messages m
+            WHERE m.peer_id NOT IN (SELECT peer_id FROM peers)
+              AND m.peer_id NOT IN ('peer-1', 'peer-2', 'demo-peer-1', 'demo-peer-2', 'local', ?)
+            GROUP BY m.peer_id
+        """.trimIndent()
+        try {
+            dbHelper.writableDatabase.execSQL(syncQuery, arrayOf(myPeerId))
+        } catch (_: Exception) {}
+
+        val query = """
+            SELECT 
+                p.peer_id, 
+                p.display_name, 
+                p.last_seen, 
+                p.is_trusted, 
+                p.has_peer_accepted,
+                MAX(COALESCE(m.timestamp, p.last_seen)) AS last_activity,
+                (SELECT m2.text FROM messages m2 WHERE m2.peer_id = p.peer_id ORDER BY m2.timestamp DESC LIMIT 1) AS last_message,
+                COUNT(CASE WHEN m.is_outgoing = 0 AND m.delivery_status != 'READ' THEN 1 END) AS unread_count
+            FROM peers p
+            LEFT JOIN messages m ON p.peer_id = m.peer_id
+            WHERE p.peer_id NOT IN ('peer-1', 'peer-2', 'demo-peer-1', 'demo-peer-2', 'local', ?)
+              AND p.peer_id NOT LIKE '%(%'
+              AND p.display_name NOT LIKE '%(%'
+            GROUP BY p.peer_id
+            ORDER BY last_activity DESC
+        """.trimIndent()
+
+        val cursor = db.rawQuery(query, arrayOf(myPeerId))
+        cursor.use {
+            val peerIdIdx = it.getColumnIndexOrThrow("peer_id")
+            val nameIdx = it.getColumnIndexOrThrow("display_name")
+            val lastSeenIdx = it.getColumnIndexOrThrow("last_seen")
+            val trustedIdx = it.getColumnIndexOrThrow("is_trusted")
+            val acceptedIdx = it.getColumnIndexOrThrow("has_peer_accepted")
+            val lastActIdx = it.getColumnIndexOrThrow("last_activity")
+            val lastMsgIdx = it.getColumnIndexOrThrow("last_message")
+            val unreadIdx = it.getColumnIndexOrThrow("unread_count")
+
+            while (it.moveToNext()) {
+                val peerId = it.getString(peerIdIdx)
+                val rawName = it.getString(nameIdx)
+                val displayName = if (rawName.isNotBlank() && rawName != peerId) rawName else peerId.take(12)
+                val lastSeen = it.getLong(lastSeenIdx)
+                val isTrusted = it.getInt(trustedIdx) == 1
+                val hasPeerAccepted = it.getInt(acceptedIdx) == 1
+                val lastActivity = it.getLong(lastActIdx)
+                val lastMessage = if (!it.isNull(lastMsgIdx)) it.getString(lastMsgIdx) else null
+                val unreadCount = it.getInt(unreadIdx)
+
+                conversations.add(
+                    PeerConversation(
+                        peerId = peerId,
+                        displayName = displayName,
+                        lastSeen = lastSeen,
+                        isTrusted = isTrusted,
+                        hasPeerAccepted = hasPeerAccepted,
+                        lastActivity = if (lastActivity > 0) lastActivity else lastSeen,
+                        lastMessageSnippet = lastMessage,
+                        unreadCount = unreadCount
+                    )
+                )
+            }
+        }
+        return conversations
+    }
 }
+
+data class PeerConversation(
+    val peerId: String,
+    val displayName: String,
+    val lastSeen: Long,
+    val isTrusted: Boolean,
+    val hasPeerAccepted: Boolean,
+    val lastActivity: Long,
+    val lastMessageSnippet: String?,
+    val unreadCount: Int
+)

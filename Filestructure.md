@@ -23,94 +23,137 @@ HyperShare/
 ├── build.gradle.kts                       # Root Gradle build script
 ├── settings.gradle.kts                    # Gradle settings & plugin management
 ├── gradle.properties                      # JVM & Android build properties
+├── .gitignore                             # Git ignore rules for build and local test artifacts
 ├── gradle/
 │   └── libs.versions.toml                 # Version catalog (Compose BOM, Kotlin, Coroutines)
 └── app/
     ├── build.gradle.kts                   # Application module build config (namespace: com.hypershare)
     └── src/
+        ├── test/java/com/hypershare/      # Unit Test Suite
+        │   ├── db/
+        │   │   └── MessageRepositoryTest.kt             # SQLite message repository CRUD & unread count tests
+        │   ├── identity/
+        │   │   └── IdentityManagerTest.kt               # BLAKE2b UserID derivation & Ed25519 signature tests
+        │   ├── protocol/
+        │   │   └── GroupPacketSerializationTest.kt      # Group packet types 0x20–0x29 binary serialization tests
+        │   ├── security/
+        │   │   ├── EphemeralKeyPairTest.kt              # Curve25519 ECDH key exchange symmetry tests
+        │   │   ├── PeerKeyStoreTest.kt                  # Android KeyStore public key caching tests
+        │   │   ├── SessionEncryptorTest.kt              # AES-256-GCM encryption/decryption & IV tests
+        │   │   └── TofuManagerTest.kt                   # Trust-On-First-Use key acceptance & MITM rejection tests
+        │   └── service/
+        │       ├── LanSocketManagerTest.kt              # TCP socket server & HELLO/MSG transmission tests
+        │       └── PeerDiscoveryEventTest.kt            # mDNS peer discovery & lost event tests
         └── main/
-            ├── AndroidManifest.xml        # Permissions (WiFi Direct, mDNS, Storage) & Service registration
+            ├── AndroidManifest.xml        # Permissions (WiFi Direct, mDNS, Storage, Camera) & Service registration
             └── java/
                 └── com/
                     └── hypershare/
-                        ├── MainActivity.kt                      # Edge-to-edge Compose host activity
+                        ├── MainActivity.kt                      # Edge-to-edge Compose activity, permission checks & notification router
                         ├── application/                         # App-wide singletons & state management
+                        │   ├── GroupManager.kt                  # Multi-peer group communication, O(N) packet routing & lifecycle
                         │   ├── HyperShareApplication.kt         # Application entry point
                         │   ├── SessionManager.kt                # Peer state & event flow arbitrator
+                        │   ├── StreamController.kt              # In-memory ring-buffer for video/audio
                         │   ├── TransferQueue.kt                 # Priority queue for outbound chunks
-                        │   └── StreamController.kt              # In-memory ring-buffer for video/audio
-                        ├── model/                               # Data domain models
-                        │   ├── ConnectedPeer.kt                 # Peer entity & status enum
-                        │   ├── RouteEntry.kt                    # AODV routing table entry
-                        │   ├── DataChunk.kt                     # 64 KB chunk + CRC32 payload
-                        │   ├── TransferJob.kt                   # File/stream transfer task model
-                        │   ├── Packet.kt                        # Binary packet header & payload model
-                        │   └── SessionEvent.kt                  # SharedFlow events (PeerJoined, etc.)
-                        ├── security/                            # Crypto & Key Management
-                        │   ├── EphemeralKeyPair.kt              # ECDH (Curve25519) key generation
-                        │   ├── SessionEncryptor.kt              # AES-256-GCM encryption/decryption
-                        │   ├── PeerKeyStore.kt                  # Public key storage cache
-                        │   └── TofuManager.kt                   # Trust-On-First-Use verification
-                        ├── protocol/                            # Binary Protocol & Chunking
-                        │   ├── PacketBuilder.kt                 # Packet construction & serialization
-                        │   ├── PacketParser.kt                  # ByteArray deserializer
-                        │   ├── ChunkManager.kt                  # 64 KB splitting & reassembly with CRC32
-                        │   └── ControlPacketHandler.kt          # HELLO, ACK, RREQ/RREP parser
-                        ├── routing/                             # Mesh Routing Engine
-                        │   ├── RoutingTable.kt                  # ConcurrentHashMap route table
-                        │   ├── HopManager.kt                    # TTL decrement & relay decisions
-                        │   ├── GroupOwnerElection.kt            # WiFi Direct GO scoring algorithm
-                        │   └── ModeController.kt                # Mode 1 <-> Mode 2 auto transition
-                        ├── service/                             # Android Foreground Services
-                        │   ├── MeshNetworkService.kt            # ServerSocket (Port 47200) & P2P GO
-                        │   ├── DiscoveryService.kt              # mDNS (_hypershare._tcp) & P2P scan
-                        │   └── TransferService.kt               # File I/O & chunk transfer loop
+                        │   └── UserIdentityManager.kt           # Device identity & username persistence
+                        ├── db/                                  # SQLite Database & Repositories
+                        │   ├── ChatDatabaseHelper.kt            # SQLiteOpenHelper (Schema v6) for peers, messages, groups, receipts
+                        │   ├── GroupRepository.kt               # SQLite repository for groups, members, messages & receipts
+                        │   └── MessageRepository.kt             # SQLite repository for 1-to-1 chat messages & delivery status
                         ├── di/                                  # Dependency Injection
                         │   ├── AppModule.kt                     # Application-scoped providers
                         │   └── NetworkModule.kt                 # Network & routing providers
+                        ├── identity/                            # Cryptographic Identity & Contact Trust
+                        │   ├── ContactCard.kt                   # QR exchange model with Ed25519 signature verification
+                        │   └── IdentityManager.kt               # BLAKE2b-256 UserID derivation & Ed25519 signing engine
+                        ├── model/                               # Data domain models
+                        │   ├── ConnectedPeer.kt                 # Peer entity & status enum
+                        │   ├── DataChunk.kt                     # 64 KB chunk + CRC32 payload
+                        │   ├── GroupInviteCard.kt               # Signed group invite payload with expiration & verification
+                        │   ├── GroupModels.kt                   # Group, GroupMember, GroupMessage & packet DTOs
+                        │   ├── Packet.kt                        # Binary packet header, payload model & PacketType enum (0x01–0x29)
+                        │   ├── PeerDiscoveryEvent.kt            # Sealed class representing mDNS peer discovered/lost events
+                        │   ├── RouteEntry.kt                    # AODV routing table entry
+                        │   ├── SessionEvent.kt                  # SharedFlow events (PeerJoined, ModeChanged, etc.)
+                        │   └── TransferJob.kt                   # File/stream transfer task model
+                        ├── protocol/                            # Binary Protocol & Chunking
+                        │   ├── ChunkManager.kt                  # 64 KB splitting & reassembly with CRC32
+                        │   ├── ControlPacketHandler.kt          # HELLO, ACK, RREQ/RREP parser
+                        │   ├── PacketBuilder.kt                 # Packet construction & binary serialization
+                        │   └── PacketParser.kt                  # ByteArray deserializer
+                        ├── routing/                             # Mesh Routing Engine
+                        │   ├── GroupOwnerElection.kt            # WiFi Direct GO scoring algorithm
+                        │   ├── HopManager.kt                    # TTL decrement & relay decisions
+                        │   ├── ModeController.kt                # Mode 1 <-> Mode 2 auto transition
+                        │   └── RoutingTable.kt                  # ConcurrentHashMap route table with stale route pruning
+                        ├── security/                            # Crypto & Key Management
+                        │   ├── EphemeralKeyPair.kt              # ECDH (Curve25519) key generation & secret derivation
+                        │   ├── PeerKeyStore.kt                  # Public key storage cache
+                        │   ├── SessionEncryptor.kt              # AES-256-GCM encryption/decryption with unique 12-byte IV
+                        │   └── TofuManager.kt                   # Trust-On-First-Use verification
+                        ├── service/                             # Android Foreground Services & Network Engines
+                        │   ├── DiscoveryService.kt              # mDNS (_hypershare._tcp) & UDP broadcast discovery (Mode 1)
+                        │   ├── LanSocketManager.kt              # Singleton TCP socket engine (Port 47200), HELLO loop suppression
+                        │   ├── MeshNetworkService.kt            # Foreground service managing LAN socket & WifiDirectController
+                        │   ├── TransferService.kt               # File I/O & chunk transfer loop
+                        │   └── WifiDirectController.kt          # WifiP2pManager wrapper, P2P discovery & group connection
                         └── ui/                                  # Jetpack Compose UI Layer
-                            ├── theme/                           # Design tokens (OLED dark theme)
-                            │   ├── Color.kt                     # Signal Blue (#3B82F6), Mesh Teal (#14B8A6)
-                            │   ├── Type.kt                      # Monospace captions & Inter typography
-                            │   └── Theme.kt                     # HyperShareTheme dark color scheme
+                            ├── chat/                            # 1-to-1 Encrypted Chat Screen
+                            │   ├── ChatScreen.kt                # Message bubbles, contact gating banner, camera/attachment bar
+                            │   └── ChatViewModel.kt             # Message thread state, contact gating & receipt management
                             ├── components/                      # Reusable Compose UI elements
+                            │   ├── AmbientMeshGraphCanvas.kt    # Butter-smooth background mesh particle graph canvas
+                            │   ├── BottomNavBar.kt              # 3-tab navigation bar (Home, Peers/Chats, Scan QR)
                             │   ├── GlassCard.kt                 # Frosted 5% white glass overlay modifier
-                            │   ├── GroupAvatarStack.kt           # Stacked overlapping avatar circles with deterministic colors
-                            │   ├── StatusChip.kt                # State indicator chip (CONNECTED, RELAY)
-                            │   ├── QrCodeCard.kt                # Real ZXing QR Code matrix renderer
-                            │   └── QrCodeGenerator.kt           # ZXing BitMatrix encoder utility
-                            ├── navigation/                      # Navigation Graph
-                            │   └── NavGraph.kt                  # NavDisplay host & screen routes
-                            ├── peerlist/                        # Peer List Screen
-                            │   ├── PeerListScreen.kt            # Live peer list UI with FAB mode switch
-                            │   └── PeerListViewModel.kt         # PeerListUiState & mode toggle
-                            ├── chat/                            # Encrypted Chat Screen
-                            │   ├── ChatScreen.kt                # Per-peer messaging bubble UI
-                            │   └── ChatViewModel.kt             # Message thread state
+                            │   ├── GroupAvatarStack.kt          # Stacked overlapping avatars with deterministic colors & +N badge
+                            │   ├── QrCodeCard.kt                # ZXing QR Code matrix renderer for Share ID
+                            │   ├── QrCodeGenerator.kt           # ZXing BitMatrix encoder utility
+                            │   └── StatusChip.kt                # State indicator chip (CONNECTED, RELAY, MODE)
                             ├── filebrowser/                     # File Transfer Browser Screen
                             │   ├── FileBrowserScreen.kt         # File picker & VIEW_ONLY toggle UI
                             │   └── FileBrowserViewModel.kt      # Transfer queue state
-                            ├── stream/                          # In-Memory Stream Player Screen
-                            │   ├── StreamPlayerScreen.kt        # View-only video player UI
-                            │   └── StreamPlayerViewModel.kt     # Streaming ring-buffer state
+                            ├── group/                           # Group Communication Screens
+                            │   ├── GroupAvatarStack.kt          # Stacked avatar circles component
+                            │   ├── GroupBottomSheets.kt         # CreateGroup, DirectInvite, GroupJoin bottom sheets
+                            │   ├── GroupChatScreen.kt           # Multi-peer chat UI, sender colors, admin menu & QR invite modal
+                            │   ├── GroupChatViewModel.kt        # Group messaging, invite dispatch & admin approval state
+                            │   ├── GroupInviteActionReceiver.kt # BroadcastReceiver for notification invite accept/decline
+                            │   ├── GroupJoinRequestReceiver.kt  # BroadcastReceiver for admin join request approval
+                            │   ├── GroupListScreen.kt           # Group list with FAB creation dialog
+                            │   └── GroupListViewModel.kt        # Group list state management
+                            ├── home/                            # Home Dashboard Screen
+                            │   ├── HomeScreen.kt                # Mode selector cards (Local Green / Emergency Red), QR Share ID
+                            │   └── HomeViewModel.kt             # Device identity, unread count badge & connection status
                             ├── modetoggle/                      # Network Mode Switcher Modal
                             │   ├── ModeToggleScreen.kt          # Mode 1 vs Mode 2 selector card UI
                             │   └── ModeToggleViewModel.kt       # Selected mode state
+                            ├── navigation/                      # Navigation Graph
+                            │   └── NavGraph.kt                  # NavDisplay host, dual-service binding, type-safe NavKeys
+                            ├── peerlist/                        # Peer List Screen
+                            │   ├── PeerListScreen.kt            # Live peer list UI with Wi-Fi Direct connection banners & pull-to-refresh
+                            │   └── PeerListViewModel.kt         # LAN & Wi-Fi Direct peer state, connection state & filters
+                            ├── qrscanner/                       # Universal QR Code Scanner & Identity Exchange
+                            │   ├── QrScannerScreen.kt           # CameraX scanner, reticle overlay, gallery image picker & paste dialog
+                            │   └── QrScannerViewModel.kt        # Universal QR decoding (Contact Cards & Group Invites) & Ed25519 check
                             ├── routingdebug/                    # Dev Routing Visualizer Screen
                             │   ├── RoutingDebugScreen.kt        # Mesh topology visualizer UI
                             │   └── RoutingDebugViewModel.kt     # Routing table debug state
-                            ├── group/                           # Group Communication Screens
-                            │   ├── GroupListScreen.kt            # Group list with FAB creation dialog
-                            │   ├── GroupListViewModel.kt         # Group list state management
-                            │   ├── GroupChatScreen.kt            # Group chat UI with admin menu & invite flows
-                            │   ├── GroupChatViewModel.kt         # Group chat state, invite, and messaging logic
-                            │   ├── GroupBottomSheets.kt          # CreateGroup, DirectInvite, GroupJoin bottom sheets
-                            │   ├── QrCodeScannerDialog.kt        # Full-screen QR Scanner Dialog with 5-step pipeline & corner brackets
-                            │   ├── GroupInviteActionReceiver.kt  # BroadcastReceiver for notification Join/Decline actions
-                            │   └── GroupJoinRequestReceiver.kt   # BroadcastReceiver for admin join request approval/decline
-                            └── qrscanner/                       # QR Code Scanner & Identity Exchange Screen
-                                ├── QrScannerScreen.kt           # CameraX scanner, reticle overlay, gallery image picker & paste dialog
-                                └── QrScannerViewModel.kt        # QR frame decoding, gallery photo decoding & Ed25519 signature verification
+                            ├── settings/                        # User & App Settings Screens
+                            │   ├── AccountSettingsScreen.kt     # Profile settings, Peer ID, cryptographic fingerprint
+                            │   ├── AccountSettingsViewModel.kt  # Account identity state management
+                            │   ├── AppSettingsScreen.kt         # App config, theme preferences, developer data wipe
+                            │   └── AppSettingsViewModel.kt      # App settings state management
+                            ├── stream/                          # In-Memory Stream Player Screen
+                            │   ├── StreamPlayerScreen.kt        # View-only video player UI
+                            │   └── StreamPlayerViewModel.kt     # Streaming ring-buffer state
+                            ├── testing/                         # Crypto & Protocol Playground Screen
+                            │   ├── SecurityPlaygroundScreen.kt  # Interactive Phase 0 test harness UI
+                            │   └── SecurityPlaygroundViewModel.kt # Playground test execution ViewModel
+                            └── theme/                           # Design tokens (OLED dark theme)
+                                ├── Color.kt                     # Signal Blue, Mesh Teal, BackgroundBase, ConnectedGreen
+                                ├── Theme.kt                     # HyperShareTheme dark color scheme
+                                └── Type.kt                      # Monospace captions & Inter typography
 ```
 
 ---
@@ -121,51 +164,69 @@ HyperShare/
 - `docs/Architecture.md`: Master architectural blueprint (Layers: UI -> Application -> Service -> Routing -> Protocol -> Security -> Hardware).
 - `docs/Bug_Log.md`: Production bugs, edge cases, SLA severity standards, and issue register.
 - `docs/Mesh_Routing_Logic.md`: Routing specifications (AODV, RREQ, RREP, RERR, GO Election algorithm).
-- `docs/Protocol_Specs.md`: Binary protocol specification (1 byte Version, 1 byte Type, 1 byte TTL, 4 byte SeqNum, etc.).
+- `docs/Protocol_Specs.md`: Binary protocol specification (Packet types 0x01–0x29, headers, flags, payload formats).
 - `docs/Running_Steps.md`: Device deployment, ADB connection, and app testing instructions.
-- `docs/Theme.md`: Design system rules (Dark OLED `#0A0A0F`, Glass Card overlays, Status chips, JetBrains Mono font).
+- `docs/Testing_Scenarios.md`: Test cases for Mode 1 (LAN) and Mode 2 (Wi-Fi Direct P2P) mesh topologies.
+- `docs/Theme.md`: UI design system rules (Dark OLED `#0A0A0F`, Glass Card overlays, Status chips, JetBrains Mono font).
 - `docs/Workflow.md`: 24-week development roadmap.
 
 ### Android Application Layer (`app/src/main/java/com/hypershare/`)
-- `MainActivity.kt`: Entry Activity enabling edge-to-edge layout and mounting `HyperShareNavGraph()`.
+- `MainActivity.kt`: Entry Activity enabling edge-to-edge layout, checking runtime permissions (`NEARBY_WIFI_DEVICES` on Android 13+ vs `ACCESS_FINE_LOCATION`), deferring foreground network services until granted, handling notification deep links (`OPEN_PEER_ID`, `OPEN_GROUP_ID`), and mounting `HyperShareNavGraph()`.
 - `application/SessionManager.kt`: Global state holder exposing `StateFlow<List<ConnectedPeer>>` and `SharedFlow<SessionEvent>`.
+- `application/UserIdentityManager.kt`: KeyStore/SharedPreferences per-device username & peer ID persistence.
+- `application/GroupManager.kt`: Core group state machine, admin access control, O(N) direct message distribution, temporary group lifecycle tracking, and reconnection restore manager.
 - `application/TransferQueue.kt`: Outbound transfer priority queue (`CONTROL > DISASTER_MSG > FILE > STREAM`).
 - `application/StreamController.kt`: Ring-buffered in-memory byte stream for `VIEW_ONLY` permissions.
+- `db/ChatDatabaseHelper.kt`: SQLiteOpenHelper (Schema v6) managing `peers`, `messages`, `groups`, `group_members`, `group_messages`, and `group_message_receipts`.
+- `db/MessageRepository.kt`: SQLite database repository for 1-to-1 chats, read receipt progression (`SENT`, `DELIVERED`, `READ`), unread message counters, `getAllConversations()` history querying, and legacy demo row cleanup.
+- `db/GroupRepository.kt`: SQLite database repository for `Group`, `GroupMember`, `GroupMessage`, and `GroupMessageReceipt` entities.
+- `identity/IdentityManager.kt`: Stable device cryptographic identity generator (`BLAKE2b-256` UserID derivation) and Ed25519 keypair signer.
+- `identity/ContactCard.kt`: Cryptographically signed contact exchange model with Ed25519 signature verification.
 - `security/SessionEncryptor.kt`: AES-256-GCM encryption wrapper with random 12-byte IV per packet.
 - `security/EphemeralKeyPair.kt`: KeyPairGenerator ("EC", 256-bit) and ECDH shared secret derivation.
 - `security/PeerKeyStore.kt`: Public key storage cache.
-- `security/TofuManager.kt`: Trust-On-First-Use verification.
+- `security/TofuManager.kt`: Trust-On-First-Use verification and public key pinning engine.
 - `protocol/ChunkManager.kt`: Splits files into 64 KB chunks and verifies CRC32 on reassembly.
-- `protocol/PacketBuilder.kt` & `PacketParser.kt`: Handles binary serialization and parsing of custom network packets.
+- `protocol/PacketBuilder.kt` & `PacketParser.kt`: Handles binary serialization and parsing of custom network packets (types 0x01–0x29).
 - `routing/RoutingTable.kt`: Manages `ConcurrentHashMap<String, RouteEntry>` with stale route pruning.
 - `routing/HopManager.kt`: Validates destination, decrements TTL, and makes `DeliverLocal` vs `Relay` decisions.
 - `model/PeerDiscoveryEvent.kt`: Sealed class representing `PeerDiscovered(peer)` and `PeerLost(peerId)` mDNS events.
-- `service/MeshNetworkService.kt`: Foreground service listening on TCP port `47200` (Mode 1) & managing WifiP2p (Mode 2).
-- `service/DiscoveryService.kt`: Foreground service running `NsdManager` mDNS service registration (`_hypershare._tcp.`), resolution, and discovery event emission.
-- `ui/theme/Color.kt`: Color constants (`SignalBlue`, `MeshTeal`, `BackgroundBase`, `ConnectedGreen`, etc.).
-- `ui/components/GlassCard.kt`: Custom Modifier `.glassCard()` applying 5% white overlay and 8% border.
-- `ui/components/BottomNavBar.kt`: 3-tab bottom navigation bar (Home/Share, Peers & Chats, Scan ID) + Settings link.
-- `ui/components/QrCodeCard.kt`: QR Code grid component displaying "Share ID".
-- `ui/home/HomeScreen.kt` & `HomeViewModel.kt`: Screen 1 UI (HYPERSHARE banner, LOCAL MODE Green / EMERGENCY MODE Red cards, QR Share ID card).
-- `ui/peerlist/PeerListScreen.kt`: Screen 2 UI (HYPERSHARE banner, grey list cards, status subtext `__NEW_MESSAGE__` Green / `__SENT_MESSAGE__` Red).
-- `ui/chat/ChatScreen.kt`: Screen 3 UI (Header with avatar & 3-dots, `__DATE_OF_CONVERSATION__` divider, Blue outbound bubbles on right, Green inbound bubbles on left, bottom input bar with Camera + Attachment icons).
-- `ui/settings/AccountSettingsScreen.kt` & `AccountSettingsViewModel.kt`: Account profile settings screen (User display name, Peer Node ID, ECDH key fingerprint, QR ID badge).
-- `ui/settings/AppSettingsScreen.kt` & `AppSettingsViewModel.kt`: App configuration screen (Dark/Light mode preference, auto-switch emergency mode toggle, security playground link).
-- `ui/components/GroupAvatarStack.kt`: Stacked overlapping circular avatars component with deterministic color assignment from `userId.hashCode()` and `+N` overflow badge.
-- `ui/group/GroupListViewModel.kt` & `GroupChatViewModel.kt`: Group list management and group chat messaging / member management state ViewModels.
-- `ui/group/GroupChatScreen.kt`: Group chat UI with message bubbles, GroupAvatarStack header, three-dot admin menu (Broadcast Invite, QR Invite, Invite Directly), QR invite full-screen modal, and admin join request banners.
-- `ui/group/GroupBottomSheets.kt`: Bottom sheet composables for group creation (member selection, segmented type control), direct peer invitation, and incoming group join requests with provenance badges (`QR`, `BROADCAST`, `DIRECT`).
-- `ui/group/QrCodeScannerDialog.kt`: Full-screen camera scanner dialog with dark scrim `#0A0A0F`, 260x260dp viewport, pulsing corner brackets (`MeshTeal`), horizontal scan line (`SignalBlue`), 5-step verification pipeline (Ed25519 signature hard stop), and `PostScanJoinConfirmationView`.
-- `ui/group/GroupInviteActionReceiver.kt` & `GroupJoinRequestReceiver.kt`: `BroadcastReceiver` implementations (`exported="false"`) handling notification inline actions for broadcast invites and admin join request approvals.
+- `model/GroupModels.kt`: Data models and serializable packet DTOs for multi-peer groups.
 - `model/GroupInviteCard.kt`: Cryptographically signed group invite model with `Ed25519` signature verification and JSON serialization.
-- `ui/navigation/NavGraph.kt`: Type-safe navigation entries for all app screens including `AccountSettingsNavKey`, `AppSettingsNavKey`, `GroupListNavKey`, and `GroupChatNavKey`.
+- `service/MeshNetworkService.kt`: Foreground service hosting `LanSocketManager` server on TCP port `47200` and managing `WifiDirectController` in Mode 2; automatically triggers client-to-GO socket connection and maps P2P MAC addresses to peer IDs.
+- `service/WifiDirectController.kt`: Android `WifiP2pManager` wrapper managing P2P discovery, push-button group connection (`WpsInfo.PBC`), connection state flow, device address to peer ID mapping, and runtime permission gating.
+- `service/DiscoveryService.kt`: Foreground service running `NsdManager` mDNS service registration (`_hypershare._tcp.`) with synchronized cryptographic `peerId` in TXT records and UDP broadcast discovery (Mode 1), pausing during Mode 2.
+- `service/LanSocketManager.kt`: Singleton TCP socket engine on port `47200` with synchronized length-prefixed framing, bidirectional socket loops, `PeerHandshakeEvent` emission, duplicate HELLO loop prevention (`helloResponsesSent`), and direct background SQLite message persistence.
+- `ui/navigation/NavGraph.kt`: Type-safe navigation graph mounting screens via `NavKey`s (`PeerListNavKey(mode)`), per-peer scoped `ChatViewModel(key = key.peerId)` lifecycle binding, dual-service binding (`DiscoveryService` and `MeshNetworkService`), Wi-Fi Direct connection handling, and deep-link routing.
+- `ui/peerlist/PeerListScreen.kt` & `PeerListViewModel.kt`: Live conversation & peer list UI with stable WhatsApp-style sorting (`lastActivity DESC`), green outline for online LAN peers, ever-connected emergency peers persistence for multi-hop mesh, and zero demo room clutter.
+- `ui/chat/ChatScreen.kt` & `ChatViewModel.kt`: 1-to-1 encrypted messaging with strict peer isolation (immediate state reset on load), contact gating state banner, 3-stage delivery ticks (Sent `✓`, Delivered `✓✓`, Read `✓✓` in Green), and attachment picker.
+- `ui/group/GroupListScreen.kt` & `GroupListViewModel.kt`: Group chat list screen with creation FAB and member counts.
+- `ui/group/GroupChatScreen.kt` & `GroupChatViewModel.kt`: Group chat UI with sender-colored names, three-dot admin menu (Broadcast Invite, QR Invite, Invite Directly), QR invite modal with countdown, and admin join request banners.
+- `ui/group/GroupBottomSheets.kt`: Bottom sheet composables for group creation, direct peer invitations, and incoming group join requests.
+- `ui/group/GroupAvatarStack.kt`: Stacked overlapping circular avatars with deterministic color assignment from `userId.hashCode()` and `+N` overflow badge.
+- `ui/group/GroupInviteActionReceiver.kt` & `GroupJoinRequestReceiver.kt`: `BroadcastReceiver` implementations handling notification inline actions for broadcast invites and admin join request approvals.
+- `ui/qrscanner/QrScannerScreen.kt` & `QrScannerViewModel.kt`: Universal QR scanner (CameraX, gallery picker, paste fallback) with Ed25519 signature validation and TOFU pinning.
+- `ui/home/HomeScreen.kt` & `HomeViewModel.kt`: Home dashboard with Mode selector cards (Local Mode Green / Emergency Mode Red), device QR ID card, and unread badges.
+- `ui/settings/AccountSettingsScreen.kt` & `AccountSettingsViewModel.kt`: Account profile settings screen (User display name, Peer Node ID, ECDH key fingerprint, QR ID badge).
+- `ui/settings/AppSettingsScreen.kt` & `AppSettingsViewModel.kt`: App configuration screen (Dark/Light mode preference, auto-switch emergency mode toggle, security playground link, developer data wipe).
 - `ui/testing/SecurityPlaygroundScreen.kt` & `SecurityPlaygroundViewModel.kt`: Interactive Phase 0 test harness UI for ECDH agreement, AES-256-GCM encryption/decryption, binary packet serialization, and TOFU key store verification.
-- `db/GroupRepository.kt`: SQLite database repository for `Group`, `GroupMember`, and `GroupMessage` entities.
-- `model/GroupModels.kt`: Data models and serializable packet DTOs for multi-peer groups (`Group`, `GroupMember`, `GroupMessage`, `GroupCreatePayload`, etc.).
-- `application/GroupManager.kt`: Core group state machine, admin access control, O(N) direct message distribution, temporary group lifecycle tracking, and reconnection restore manager.
+- `ui/components/AmbientMeshGraphCanvas.kt`: Butter-smooth background mesh particle graph canvas with float array recycling.
+- `ui/components/GlassCard.kt`: Custom Modifier `.glassCard()` applying 5% white overlay and 8% border.
+- `ui/components/BottomNavBar.kt`: 3-tab bottom navigation bar (Home/Share, Peers & Chats, Scan ID).
+- `ui/components/QrCodeCard.kt` & `QrCodeGenerator.kt`: ZXing BitMatrix encoder and QR Code canvas renderer.
+- `ui/components/StatusChip.kt`: State indicator chip (CONNECTED, RELAY, MODE).
+- `ui/theme/`: `Color.kt`, `Theme.kt`, `Type.kt` design tokens.
 
 ### Unit Tests (`app/src/test/java/com/hypershare/`)
+- `db/MessageRepositoryTest.kt`: SQLite message repository CRUD, read receipts, and unread count queries.
+- `identity/IdentityManagerTest.kt`: Stable device UUID, BLAKE2b UserID derivation, and Ed25519 signing/verification.
+- `protocol/GroupPacketSerializationTest.kt`: Unit tests verifying serialization, parsing, and enum mapping for group packet types `0x20`–`0x29`.
 - `security/EphemeralKeyPairTest.kt`: Unit tests verifying EC 256-bit key pair generation & ECDH shared secret symmetry across two peers.
+- `security/SessionEncryptorTest.kt`: Unit tests verifying AES-256-GCM encryption/decryption roundtrip, unique IV headers, and payload tamper detection.
+- `security/PeerKeyStoreTest.kt`: Unit tests for public key caching, retrieval, and removal.
+- `security/TofuManagerTest.kt`: Unit tests for Trust-On-First-Use key acceptance, identity verification, and MITM alteration rejection.
+- `service/LanSocketManagerTest.kt`: Unit tests for TCP server socket, HELLO handshake, and MSG transmission.
+- `service/PeerDiscoveryEventTest.kt`: Unit tests for mDNS peer discovered/lost events and `PeerListViewModel` state updates.fying EC 256-bit key pair generation & ECDH shared secret symmetry across two peers.
 - `security/SessionEncryptorTest.kt`: Unit tests verifying AES-256-GCM encryption/decryption roundtrip, unique IV headers, and payload tamper detection.
 - `security/PeerKeyStoreTest.kt`: Unit tests for public key caching, retrieval, and removal.
 - `security/TofuManagerTest.kt`: Unit tests for Trust-On-First-Use key acceptance, identity verification, and MITM alteration rejection.
@@ -212,6 +273,17 @@ HyperShare/
 | 2026-08-15 | AI Agent | Group 3-Stage Tick Verification & Industry Notification System | (1) Added `GROUP_MSG_READ` (`0x29`) packet type and upgraded database to `DATABASE_VERSION = 6` with `group_message_receipts` table. (2) Implemented Group 3-stage tick progression: 1 Grey Tick (`✓`) = Sent, 2 Grey Ticks (`✓✓`) = Delivered to all members, 2 Green Ticks (`✓✓`) = Read/viewed by all members. (3) Built high-priority status bar notification channel `"hypershare_group_messages"` with heads-up banners and deep-link intent navigation (`OPEN_GROUP_ID`). (4) Added per-group unread counters and circular pill badges (`1`, `2`, `99+`) on `PeerListScreen.kt`. |
 | 2026-08-15 | AI Agent | UI & Backend Latency Optimizations | (1) Optimized `AmbientMeshGraphCanvas.kt` with primitive float array recycling to eliminate frame object allocations for butter-smooth 60-120 FPS animation. (2) Created `TimeFormatter.kt` singleton using `ThreadLocal<SimpleDateFormat>` for zero-allocation date formatting in message bubbles across `ChatScreen.kt` and `GroupChatScreen.kt`. (3) Offloaded SQLite unread count queries to `Dispatchers.IO` in `PeerListScreen.kt` to prevent UI thread layout composition lag. (4) Added `BufferedOutputStream` wrapping to TCP streams in `LanSocketManager.kt` for faster packet throughput. |
 | 2026-09-04 | AI Agent | Week 8 Final Polish, Build Verification & Sign-off | (1) Added missing 10 group packet types (`0x20`–`0x29`) to `PacketType` and `PacketBuilder.buildGroupPacket()`. (2) Implemented `GroupAvatarStack.kt`, `GroupListViewModel.kt`, `GroupListScreen.kt`, `GroupChatViewModel.kt`, `GroupChatScreen.kt`, and `GroupBottomSheets.kt`. (3) Added `GroupInviteActionReceiver.kt` and `GroupJoinRequestReceiver.kt` in `AndroidManifest.xml`. (4) Added `GroupPacketSerializationTest.kt` unit tests. (5) Resolved `getPublicKeyHex` in `IdentityManager` and verified 100% test pass (`./gradlew test`) and clean APK compilation (`./gradlew assembleDebug`). Week 8 is complete and rock-solid. |
+| 2026-09-07 | rushil539 / AI Agent | SIH Prototype Wi-Fi Direct Connection 1st Implementation | (1) Built `WifiDirectController.kt` managing Android `WifiP2pManager` channel lifecycle, P2P peer discovery, push-button configuration (`WpsInfo.PBC`) group formation, and `WifiDirectConnectionState` StateFlow. (2) Added runtime permission gating for Android 13+ (`NEARBY_WIFI_DEVICES`) and Android 10–12 (`ACCESS_FINE_LOCATION`) in `MainActivity.kt` and `WifiDirectController.kt`, deferring foreground network service start until granted. (3) Updated `MeshNetworkService.kt` to coordinate `WifiDirectController`, automate client-to-GO socket connection (`192.168.49.1:47200`) upon group formation, and associate Wi-Fi Direct MAC addresses with TCP HELLO peer IDs. (4) Updated `LanSocketManager.kt` with `connectToPeer()`, `sendHelloResponseIfNeeded()`, `peerHandshakeEventsFlow`, and `helloResponsesSent` loop suppression. (5) Updated `NavGraph.kt` with `PeerListNavKey(mode)`, dual foreground service start (`EXTRA_MODE`), and Wi-Fi Direct peer connection clicks. (6) Updated `PeerListScreen.kt` and `PeerListViewModel.kt` with dynamic Wi-Fi Direct status banners (`SCANNING`, `CONNECTING`, `CONNECTED`, `GROUP OWNER`), P2P peer list items, and pull-to-refresh discovery. |
+| 2026-09-07 | AI Agent | Complete Documentation & Filestructure Index Synchronization | (1) Updated `Filestructure.md` directory tree and file responsibilities with all active components (`WifiDirectController.kt`, `db/`, `identity/`, test suite). (2) Updated `Architecture.md` with Wi-Fi Direct controller, dynamic dual-mode service layer, and group persistence. (3) Updated `Workflow.md` marking Week 12 / SIH Prototype 1st Implementation completed. (4) Updated `Protocol_Specs.md` with `READ_ACK` (`0x09`), `CONTACT_ACCEPT` (`0x0A`), `GROUP_MSG_READ` (`0x29`), and Section 13 (Wi-Fi Direct P2P socket handshake). (5) Updated `Bug_Log.md` resolving ISSUE-004 and logging ISSUE-008 (HELLO handshake loop) and ISSUE-009 (Android 13+ permissions). (6) Updated `Testing_Scenarios.md` with M2-TC-01 prototype testing steps. (7) Updated `README.md` with valid `docs/` links, new feature specifications, and repository structure. |
+| 2026-09-07 | AI Agent | Duplicate Chat & Ghost Peer Consolidation | (1) **Self-Chat Filter**: Added `WifiManager.connectionInfo.ipAddress` in `DiscoveryService.kt` and `PeerListViewModel.kt` to filter the local device from mDNS/UDP discovery loops and UI cards. (2) **Peer Deduplication & Merging**: Consolidated `recomputeConversationItems()` in `PeerListViewModel.kt` to key by normalized device name and IP, seamlessly collapsing offline DB chats and live LAN broadcasts into exactly one card per physical peer. (3) **Legacy Peer Migration**: Enhanced `cleanupGhostAndDemoData()` in `MessageRepository.kt` to automatically migrate messages from legacy short mDNS peer IDs to genuine cryptographic peer IDs and delete stale duplicate rows. |
+| 2026-09-07 | AI Agent | Real-Time Peer Offline Detection & Green Outline Extinction | (1) **Peer Liveness Reaper**: Added 6s (`PEER_OFFLINE_TIMEOUT_MS`) periodic ticker in `DiscoveryService.kt` and `PeerListViewModel.kt` to actively evict LAN peers that stop sending UDP pings (3 missed pings). (2) **Instant UDP Goodbye**: Implemented `HYPERSHARE_BYE` packet broadcast on service stop / mode switch in `DiscoveryService.kt` for sub-second offline transition. (3) **Fuzzy PeerLost Matching & State Reset**: Upgraded `PeerLost` event handling in `PeerListViewModel.kt` to remove peers matching by ID, name, or IP, and reset `isOnlineOnLan = false` and `ipAddress = null` when peers go offline. (4) **Green Outline Dynamic Extinction**: Verified that offline peer cards immediately drop the green outline and revert to the subtle background border. |
+| 2026-09-07 | AI Agent | Emergency Mode Architecture & Mutual Trust Consolidation | (1) **Mutually Accepted Peer Filtering**: Filtered Emergency Mode (`MODE_2_MESH`) conversations in `PeerListViewModel.kt` strictly to contacts with mutual trust (`isTrusted && hasPeerAccepted`), eliminating random Wi-Fi Direct devices (`DESKTOP-*`, `Android_*`, raw MACs). (2) **Online/Offline Status Discarded in Emergency Mode**: Suppressed green outlines and P2P badges in Emergency Mode to prevent multi-hop heartbeat bandwidth and battery drain while preserving real-time green outlines in Local Mode. (3) **Instant Reciprocal Contact Accept**: Enhanced `LanSocketManager.kt` to auto-respond with reciprocal `CONTACT_ACCEPT` when receiving acceptance from an already-trusted contact, and registered new sockets in `activeSockets` to listen for incoming replies. (4) **Ghost Wi-Fi Direct Pruning**: Added cleanup in `MessageRepository.kt` deleting legacy test artifacts (`Android_%`, `DESKTOP-%`, `LAPTOP-%`, MAC addresses). Verified on physical Android device with screenshot testing. |
+| 2026-09-07 | AI Agent | Automatic Wi-Fi Direct Connection & Emergency Message Queuing | (1) Added local P2P device tracking (`myDeviceAddress`/`myDeviceName`) via `WIFI_P2P_THIS_DEVICE_CHANGED_ACTION` in `WifiDirectController.kt`. (2) Implemented deterministic collision-free auto-connection (`myMac >= peerMac` initiates with `groupOwnerIntent = 15`) in `MeshNetworkService.kt`, strictly filtering out non-mobile devices (`DESKTOP-*`, `LAPTOP-*`, TVs). (3) Added persistent `peerId` <-> `deviceAddress` mapping in `SharedPreferences`. (4) Built outbound emergency message queue in `LanSocketManager.kt` (`queuePendingMessage` / `flushPendingMessagesForPeer`) to automatically flush queued messages upon P2P socket connection. (5) Added real-time Wi-Fi Direct connection status banner in `ChatScreen.kt` and `NavGraph.kt`. |
+| 2026-09-07 | AI Agent | Zero-Touch Mutual Wi-Fi Direct Auto-Connect & Resilient TCP Engine | (1) **Symmetric Intent Negotiation**: Added `calculateGoIntent` in `WifiDirectController.kt` deterministically assigning Intent 15 to the higher node and Intent 0 to the lower node. (2) **Zero-Prompt Mutual Connect**: Removed one-sided initiator block in `MeshNetworkService.kt` so both devices call `autoConnectToPeer` simultaneously with complementary intents, satisfying WPS PBC and completely bypassing Android's `UserAuthorizingNegotiationRequestState` without system settings intervention. (3) **Discovery Lifecycle & Auto-Restart**: Handled `WIFI_P2P_DISCOVERY_CHANGED_ACTION` to prevent discovery timeout lockup and auto-restart discovery when disconnected in Emergency Mode. (4) **Direct Device Info**: Added API 29+ `requestDeviceInfo` in `WifiDirectController.kt` for instant MAC resolution. (5) **Resilient Socket Retry**: Added 6-attempt retry loop with backoff in `LanSocketManager.connectToPeer` to gracefully bridge DHCP IP assignment delay on `p2p0`. |
+| 2026-10-14 | AI Agent | Git Ignore Cleanup for Local Artifacts | Added `.gitignore` rules for local SQLite test databases (`*.db`, `*.sqlite`, `*.b64`) and screenshot artifacts to prevent tracking untracked test dumps. |
+
+
+
 
 
 

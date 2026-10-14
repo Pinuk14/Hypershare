@@ -22,4 +22,33 @@ class MessageRepositoryTest {
         assertFalse(msg2.isOutgoing)
         assertTrue(msg2.timestamp > msg1.timestamp)
     }
+
+    @Test
+    fun testPeerConversation_sortingByLastActivity() {
+        val conv1 = PeerConversation(
+            peerId = "peer-alpha",
+            displayName = "Alice",
+            lastSeen = 1000L,
+            isTrusted = true,
+            hasPeerAccepted = true,
+            lastActivity = 5000L,
+            lastMessageSnippet = "See you later!",
+            unreadCount = 0
+        )
+        val conv2 = PeerConversation(
+            peerId = "peer-beta",
+            displayName = "Bob",
+            lastSeen = 2000L,
+            isTrusted = false,
+            hasPeerAccepted = false,
+            lastActivity = 9000L,
+            lastMessageSnippet = "Latest message from Bob",
+            unreadCount = 2
+        )
+
+        val list = listOf(conv1, conv2).sortedByDescending { it.lastActivity }
+        assertEquals("peer-beta", list[0].peerId)
+        assertEquals("peer-alpha", list[1].peerId)
+        assertEquals(2, list[0].unreadCount)
+    }
 }

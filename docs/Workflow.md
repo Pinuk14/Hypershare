@@ -159,16 +159,19 @@
 
 ## Phase 2 — Mode 2: Disaster Mesh Network (Weeks 12–20)
 
-### Week 12 — WiFi Direct Fundamentals
-**Goal:** Two devices form a WiFi Direct group without crashing.
+### Week 12 — WiFi Direct Fundamentals & SIH Prototype 1st Implementation
+**Goal:** Two devices form a WiFi Direct group, establish a TCP connection between client and Group Owner (GO), and complete the HELLO handshake.
 
-- [ ] Implement `WifiP2pManager` lifecycle in `MeshNetworkService` — initialize, register receiver
-- [ ] Implement `DiscoveryService` Mode 2 — `discoverPeers()`, `requestPeers()`
-- [ ] Implement Group Owner election hook — use GO scoring function from `Mesh_Routing_Logic.md`
-- [ ] Handle all `WifiP2pManager` error codes gracefully (BUSY, NO_SERVICE_REQUESTS, etc.)
-- [ ] Manual test: Device A and Device B form a WifiP2p group; verify GO assignment in logs
+- [x] Implement `WifiDirectController` wrapping `WifiP2pManager` lifecycle (initialize channel, dynamic BroadcastReceiver, connection state flow)
+- [x] Implement runtime permission checks for Android 13+ (`NEARBY_WIFI_DEVICES`) vs older Android (`ACCESS_FINE_LOCATION`) in `MainActivity` and `WifiDirectController`
+- [x] Wire `MeshNetworkService` to `WifiDirectController` — responds to `EXTRA_MODE` intent, manages P2P lifecycle
+- [x] Implement P2P peer discovery and push-button configuration (`WpsInfo.PBC`) group connection
+- [x] Implement client-to-GO TCP connection: non-GO client retrieves GO IP from `WifiP2pInfo` and invokes `LanSocketManager.connectToPeer()`
+- [x] Implement bidirectional TCP HELLO handshake over Wi-Fi Direct channel with loop prevention (`helloResponsesSent`)
+- [x] Map Wi-Fi Direct device address to cryptographic peer ID via `LanSocketManager.peerHandshakeEventsFlow`
+- [x] Compose UI integration: `PeerListNavKey(mode)`, live Wi-Fi Direct status banners (`SCANNING`, `CONNECTING`, `CONNECTED`, `GROUP OWNER`), P2P peer list items, and Chat navigation
 
-**Deliverable:** Two-device WiFi Direct group is stable for 10 minutes.
+**Deliverable:** Two physical devices can discover each other via Wi-Fi Direct in Emergency Mode, form a P2P group, establish a TCP socket, and complete an encrypted HELLO handshake with navigation to chat.
 
 ---
 
