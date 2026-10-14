@@ -12,6 +12,14 @@ enum class PacketType(val code: Byte) {
     READ_ACK(0x09.toByte()),
     CONTACT_ACCEPT(0x0A.toByte()),
 
+    // File Transfer Protocol Packet Types (Week 9)
+    TRANSFER_INIT(0x10.toByte()),
+    TRANSFER_COMPLETE(0x11.toByte()),
+    TRANSFER_ACCEPT(0x14.toByte()),
+    TRANSFER_REJECT(0x15.toByte()),
+    TRANSFER_CHUNK_ACK(0x16.toByte()),
+    TRANSFER_CANCEL(0x17.toByte()),
+
     // Group Communication Packet Types (Week 8)
     GROUP_CREATE(0x20.toByte()),
     GROUP_JOIN_ACK(0x21.toByte()),

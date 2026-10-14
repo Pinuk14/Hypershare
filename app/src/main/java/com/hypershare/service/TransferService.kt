@@ -28,11 +28,16 @@ class TransferService : Service() {
     override fun onCreate() {
         super.onCreate()
         startForegroundNotification()
+        com.hypershare.application.TransferManager.getInstance().init(this)
     }
 
     fun processTransferJob(job: TransferJob) {
-        serviceScope.launch {
-            // Read file via ContentResolver -> split into 64KB chunks -> write to target socket
+        if (job.fileUri != null) {
+            com.hypershare.application.TransferManager.getInstance().startSendTransfer(
+                fileUri = job.fileUri,
+                targetPeerId = job.destinationPeerId,
+                isViewOnly = job.permission == com.hypershare.model.TransferPermission.VIEW_ONLY
+            )
         }
     }
 

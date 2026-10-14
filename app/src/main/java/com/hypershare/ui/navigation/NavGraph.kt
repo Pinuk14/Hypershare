@@ -190,7 +190,8 @@ fun HyperShareNavGraph(
                     },
                     onOpenAppSettings = { backStack.add(AppSettingsNavKey) },
                     onOpenAccountSettings = { backStack.add(AccountSettingsNavKey) },
-                    onOpenQrScanner = { backStack.add(QrScannerNavKey) }
+                    onOpenQrScanner = { backStack.add(QrScannerNavKey) },
+                    onOpenFileBrowser = { backStack.add(FileBrowserNavKey) }
                 )
             }
             entry<PeerListNavKey> { key ->
@@ -342,8 +343,10 @@ fun HyperShareNavGraph(
             }
             entry<FileBrowserNavKey> {
                 val vm: FileBrowserViewModel = viewModel()
+                val activePeers = discoveryService?.getActivePeers() ?: emptyList()
                 FileBrowserScreen(
                     viewModel = vm,
+                    peers = activePeers,
                     onBackClick = { backStack.removeLastOrNull() }
                 )
             }

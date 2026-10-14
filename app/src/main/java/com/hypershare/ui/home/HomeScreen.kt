@@ -51,7 +51,8 @@ fun HomeScreen(
     onOpenEmergencyModeChats: () -> Unit,
     onOpenAppSettings: () -> Unit,
     onOpenAccountSettings: () -> Unit,
-    onOpenQrScanner: () -> Unit = {}
+    onOpenQrScanner: () -> Unit = {},
+    onOpenFileBrowser: () -> Unit = {}
 ) {
     val uiState by viewModel.uiState.collectAsState()
     val context = androidx.compose.ui.platform.LocalContext.current
@@ -178,7 +179,46 @@ fun HomeScreen(
                     )
                 }
 
-                Spacer(modifier = Modifier.height(36.dp))
+                Spacer(modifier = Modifier.height(16.dp))
+
+                // Quick Share / File Transfer Card (Week 9)
+                GlassCard(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 20.dp)
+                        .clickable { onOpenFileBrowser() }
+                ) {
+                    Row(
+                        modifier = Modifier.padding(14.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .size(38.dp)
+                                .background(SignalBlue.copy(0.2f), RoundedCornerShape(10.dp)),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Text("⚡", fontSize = 18.sp)
+                        }
+                        Spacer(modifier = Modifier.width(12.dp))
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = "Quick Share & File Transfer",
+                                color = TextPrimary,
+                                fontWeight = FontWeight.Bold,
+                                fontSize = 13.sp
+                            )
+                            Text(
+                                text = "Send large files up to 500 MB with live speed meter",
+                                color = TextSecondary,
+                                fontSize = 11.sp
+                            )
+                        }
+                        Text("➔", color = SignalBlue, fontSize = 16.sp, fontWeight = FontWeight.Bold)
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(20.dp))
 
                 // Glassmorphic QR Share ID Card Container
                 GlassCard(

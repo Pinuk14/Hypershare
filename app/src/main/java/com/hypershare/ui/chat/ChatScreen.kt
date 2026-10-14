@@ -52,6 +52,9 @@ import com.hypershare.ui.theme.TextPrimary
 import com.hypershare.ui.theme.TextSecondary
 import com.hypershare.ui.theme.WarningAmber
 
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import android.net.Uri
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
@@ -384,6 +387,18 @@ fun ChatScreen(
             }
 
             // 6. Glassmorphic Bottom Input Bar
+            val chatFilePickerLauncher = rememberLauncherForActivityResult(
+                contract = ActivityResultContracts.OpenDocument()
+            ) { uri: Uri? ->
+                if (uri != null && uiState.peerId.isNotEmpty()) {
+                    com.hypershare.application.TransferManager.getInstance().startSendTransfer(
+                        fileUri = uri,
+                        targetPeerId = uiState.peerId,
+                        targetIp = uiState.peerIpAddress
+                    )
+                }
+            }
+
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -391,6 +406,18 @@ fun ChatScreen(
                     .padding(horizontal = 16.dp, vertical = 8.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
+                Box(
+                    modifier = Modifier
+                        .size(42.dp)
+                        .background(Color(0x1AFFFFFF), CircleShape)
+                        .clickable { chatFilePickerLauncher.launch(arrayOf("*/*")) },
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text("📎", fontSize = 18.sp)
+                }
+
+                Spacer(modifier = Modifier.width(6.dp))
+
                 OutlinedTextField(
                     value = uiState.inputText,
                     onValueChange = { viewModel.updateInputText(it) },

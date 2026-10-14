@@ -63,6 +63,12 @@ class LanSocketManager private constructor() {
 
     private val _peerHandshakeEventsFlow = MutableSharedFlow<PeerHandshakeEvent>(replay = 0, extraBufferCapacity = 16)
     val peerHandshakeEventsFlow: SharedFlow<PeerHandshakeEvent> = _peerHandshakeEventsFlow.asSharedFlow()
+
+    // Transfer Protocol Events Flow (Week 9)
+    private val _incomingTransferPacketsFlow = MutableSharedFlow<Packet>(replay = 0, extraBufferCapacity = 256)
+    val incomingTransferPacketsFlow: SharedFlow<Packet> = _incomingTransferPacketsFlow.asSharedFlow()
+
+    fun nextSequenceNumber(): Int = sequenceCounter.getAndIncrement()
     data class PendingOutboundMessage(
         val msgId: String,
         val targetPeerId: String,
@@ -392,6 +398,15 @@ class LanSocketManager private constructor() {
                             } ?: sourcePeerId.take(12)
                             showIncomingNotification(sourcePeerId, "$senderName accepted & saved your contact! Mutual pairing complete.")
                         }
+                        PacketType.TRANSFER_INIT,
+                        PacketType.TRANSFER_COMPLETE,
+                        PacketType.TRANSFER_ACCEPT,
+                        PacketType.TRANSFER_REJECT,
+                        PacketType.DATA,
+                        PacketType.TRANSFER_CHUNK_ACK,
+                        PacketType.TRANSFER_CANCEL -> {
+                            _incomingTransferPacketsFlow.emit(packet)
+                        }
                         else -> {}
                     }
                 }
@@ -714,6 +729,51 @@ class LanSocketManager private constructor() {
                 Log.d(TAG, "Sent CONTACT_ACCEPT to peerId=$targetPeerId ip=$targetIp")
             } catch (e: Exception) {
                 Log.e(TAG, "Failed to send CONTACT_ACCEPT to $targetPeerId: ${e.message}")
+            }
+    fun sendPacket(packet: Packet, targetPeerId: String, targetIp: String = "") {
+        scope.launch {
+            try {
+                val key = if (targetPeerId.isNotEmpty() && activeSockets.containsKey(targetPeerId)) targetPeerId
+                          else if (targetIp.isNotEmpty() && activeSockets.containsKey(targetIp)) targetIp
+                          else ""
+                var socket = if (key.isNotEmpty()) activeSockets[key] else null
+
+                if (socket == null || socket.isClosed) {
+                    if (targetIp.isEmpty()) {
+                        Log.w(TAG, "Cannot send packet ${packet.header.type} — no live socket for $targetPeerId")
+                        return@launch
+                    }
+                    val newSocket = Socket(targetIp, DEFAULT_PORT).apply { keepAlive = true }
+                    if (targetPeerId.isNotEmpty()) activeSockets[targetPeerId] = newSocket
+                    activeSockets[targetIp] = newSocket
+                    if (targetPeerId.isNotEmpty()) activeOutputStreams.remove(targetPeerId)
+                    activeOutputStreams.remove(targetIp)
+                    scope.launch(Dispatchers.IO) { handleIncomingSocket(newSocket) }
+                    socket = newSocket
+                }
+
+                val streamKey = when {
+                    targetPeerId.isNotEmpty() && activeOutputStreams.containsKey(targetPeerId) -> targetPeerId
+                    targetIp.isNotEmpty() && activeOutputStreams.containsKey(targetIp) -> targetIp
+                    targetPeerId.isNotEmpty() -> targetPeerId
+                    else -> targetIp
+                }
+                val out = activeOutputStreams.getOrPut(streamKey) {
+                    DataOutputStream(socket.getOutputStream())
+                }
+
+                val bytes = PacketBuilder.serializePacket(packet)
+                synchronized(out) {
+                    out.writeInt(bytes.size)
+                    out.write(bytes)
+                    out.flush()
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "Failed to send packet ${packet.header.type} to $targetPeerId: ${e.message}", e)
+                if (targetPeerId.isNotEmpty()) activeSockets.remove(targetPeerId)
+                if (targetIp.isNotEmpty()) activeSockets.remove(targetIp)
+                if (targetPeerId.isNotEmpty()) activeOutputStreams.remove(targetPeerId)
+                if (targetIp.isNotEmpty()) activeOutputStreams.remove(targetIp)
             }
         }
     }

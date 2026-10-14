@@ -118,13 +118,13 @@
 ### Week 9 — File Transfer (Mode 1)
 **Goal:** Files up to 500 MB transfer reliably with chunk acknowledgement.
 
-- [ ] Implement `ChunkManager.split()` — 64 KB chunks, CRC32 per chunk
-- [ ] Implement `PacketBuilder.buildDataPacket()` for DATA type
-- [ ] Implement `TransferService` — dequeue → read file → send chunks in sequence
-- [ ] Implement ACK packet handling — sender waits for ACK per chunk (sliding window: 8 chunks in flight)
-- [ ] Implement receiver reassembly — `ChunkManager.reassemble()`
-- [ ] Build `FileBrowserScreen` — file picker, permission toggle, transfer progress bar
-- [ ] Test: 100 MB file transfer, verify CRC32 integrity of received file
+- [x] Implement `ChunkManager.split()` — 64 KB chunks, CRC32 per chunk
+- [x] Implement `PacketBuilder.buildDataPacket()` for DATA type
+- [x] Implement `TransferService` — dequeue → read file → send chunks in sequence
+- [x] Implement ACK packet handling — sender waits for ACK per chunk (sliding window: 8 chunks in flight)
+- [x] Implement receiver reassembly — `ChunkManager.reassemble()`
+- [x] Build `FileBrowserScreen` — file picker, permission toggle, transfer progress bar
+- [x] Test: 100 MB file transfer, verify CRC32 integrity of received file
 
 **Deliverable:** File transfer works in Mode 1 with integrity verification.
 

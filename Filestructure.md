@@ -35,7 +35,9 @@ HyperShare/
         │   ├── identity/
         │   │   └── IdentityManagerTest.kt               # BLAKE2b UserID derivation & Ed25519 signature tests
         │   ├── protocol/
-        │   │   └── GroupPacketSerializationTest.kt      # Group packet types 0x20–0x29 binary serialization tests
+        │   │   ├── ChunkManagerStreamingTest.kt         # Streaming 64 KB chunking, CRC32 & non-OOM RandomAccessFile tests
+        │   │   ├── GroupPacketSerializationTest.kt      # Group packet types 0x20–0x29 binary serialization tests
+        │   │   └── TransferPacketSerializationTest.kt   # Transfer packet types 0x10–0x17 binary serialization tests
         │   ├── security/
         │   │   ├── EphemeralKeyPairTest.kt              # Curve25519 ECDH key exchange symmetry tests
         │   │   ├── PeerKeyStoreTest.kt                  # Android KeyStore public key caching tests
@@ -43,9 +45,13 @@ HyperShare/
         │   │   └── TofuManagerTest.kt                   # Trust-On-First-Use key acceptance & MITM rejection tests
         │   └── service/
         │       ├── LanSocketManagerTest.kt              # TCP socket server & HELLO/MSG transmission tests
-        │       └── PeerDiscoveryEventTest.kt            # mDNS peer discovery & lost event tests
+        │       ├── PeerDiscoveryEventTest.kt            # mDNS peer discovery & lost event tests
+        │       └── TransferMetricsTest.kt               # Transfer speed, peak speed, ETA & formatting tests
         └── main/
             ├── AndroidManifest.xml        # Permissions (WiFi Direct, mDNS, Storage, Camera) & Service registration
+            ├── res/
+            │   └── xml/
+            │       └── file_paths.xml     # FileProvider paths configuration for opening received files
             └── java/
                 └── com/
                     └── hypershare/
@@ -55,6 +61,7 @@ HyperShare/
                         │   ├── HyperShareApplication.kt         # Application entry point
                         │   ├── SessionManager.kt                # Peer state & event flow arbitrator
                         │   ├── StreamController.kt              # In-memory ring-buffer for video/audio
+                        │   ├── TransferManager.kt               # Sliding-window file transfer engine & speed analytics
                         │   ├── TransferQueue.kt                 # Priority queue for outbound chunks
                         │   └── UserIdentityManager.kt           # Device identity & username persistence
                         ├── db/                                  # SQLite Database & Repositories
@@ -81,7 +88,8 @@ HyperShare/
                         │   ├── ChunkManager.kt                  # 64 KB splitting & reassembly with CRC32
                         │   ├── ControlPacketHandler.kt          # HELLO, ACK, RREQ/RREP parser
                         │   ├── PacketBuilder.kt                 # Packet construction & binary serialization
-                        │   └── PacketParser.kt                  # ByteArray deserializer
+                        │   ├── PacketParser.kt                  # ByteArray deserializer
+                        │   └── TransferPayloads.kt              # Binary payloads for file transfer types 0x10–0x17
                         ├── routing/                             # Mesh Routing Engine
                         │   ├── GroupOwnerElection.kt            # WiFi Direct GO scoring algorithm
                         │   ├── HopManager.kt                    # TTL decrement & relay decisions
@@ -281,6 +289,8 @@ HyperShare/
 | 2026-09-07 | AI Agent | Automatic Wi-Fi Direct Connection & Emergency Message Queuing | (1) Added local P2P device tracking (`myDeviceAddress`/`myDeviceName`) via `WIFI_P2P_THIS_DEVICE_CHANGED_ACTION` in `WifiDirectController.kt`. (2) Implemented deterministic collision-free auto-connection (`myMac >= peerMac` initiates with `groupOwnerIntent = 15`) in `MeshNetworkService.kt`, strictly filtering out non-mobile devices (`DESKTOP-*`, `LAPTOP-*`, TVs). (3) Added persistent `peerId` <-> `deviceAddress` mapping in `SharedPreferences`. (4) Built outbound emergency message queue in `LanSocketManager.kt` (`queuePendingMessage` / `flushPendingMessagesForPeer`) to automatically flush queued messages upon P2P socket connection. (5) Added real-time Wi-Fi Direct connection status banner in `ChatScreen.kt` and `NavGraph.kt`. |
 | 2026-09-07 | AI Agent | Zero-Touch Mutual Wi-Fi Direct Auto-Connect & Resilient TCP Engine | (1) **Symmetric Intent Negotiation**: Added `calculateGoIntent` in `WifiDirectController.kt` deterministically assigning Intent 15 to the higher node and Intent 0 to the lower node. (2) **Zero-Prompt Mutual Connect**: Removed one-sided initiator block in `MeshNetworkService.kt` so both devices call `autoConnectToPeer` simultaneously with complementary intents, satisfying WPS PBC and completely bypassing Android's `UserAuthorizingNegotiationRequestState` without system settings intervention. (3) **Discovery Lifecycle & Auto-Restart**: Handled `WIFI_P2P_DISCOVERY_CHANGED_ACTION` to prevent discovery timeout lockup and auto-restart discovery when disconnected in Emergency Mode. (4) **Direct Device Info**: Added API 29+ `requestDeviceInfo` in `WifiDirectController.kt` for instant MAC resolution. (5) **Resilient Socket Retry**: Added 6-attempt retry loop with backoff in `LanSocketManager.connectToPeer` to gracefully bridge DHCP IP assignment delay on `p2p0`. |
 | 2026-10-14 | AI Agent | Git Ignore Cleanup for Local Artifacts | Added `.gitignore` rules for local SQLite test databases (`*.db`, `*.sqlite`, `*.b64`) and screenshot artifacts to prevent tracking untracked test dumps. |
+| 2026-10-14 | AI Agent | Phase 1 Week 9 Industry-Grade File Transfer & Nearby Share Experience | (1) **Sliding Window Protocol Engine**: Built `TransferManager.kt` managing 64 KB chunking, sliding window of 8 chunks in flight (`SLIDING_WINDOW_SIZE = 8`), ACK coordination, timeout retransmissions, and foreground service notification updates. (2) **Zero-OOM Streaming**: Implemented streaming CRC32 computation and `RandomAccessFile` direct disk chunk assembly in `ChunkManager.kt` allowing out-of-order 64 KB chunk placement without allocating large files in memory. (3) **Binary Transfer Protocol**: Defined `TRANSFER_INIT` (`0x10`), `TRANSFER_COMPLETE` (`0x11`), `TRANSFER_ACCEPT` (`0x14`), `TRANSFER_REJECT` (`0x15`), `TRANSFER_CHUNK_ACK` (`0x16`), and `TRANSFER_CANCEL` (`0x17`) with binary codecs in `TransferPayloads.kt` and `PacketBuilder.kt`. (4) **Live Speed Analytics & Gauges**: Implemented 500ms rolling window instantaneous speed calculation ($MB/s$, $KB/s$), cumulative average transfer speed, peak speed recording, dynamic ETA estimation, and post-transfer summary dialogs. (5) **Nearby Share / Quick Share UX**: Rebuilt `FileBrowserScreen.kt` & `FileBrowserViewModel.kt` with file picker, nearby peer radar target chips, live transfer metrics cards, incoming transfer Accept/Decline modal sheets, and `FileProvider` external open-file launcher. (6) **Chat Attachment Integration**: Added attachment (📎) button to `ChatScreen.kt` input bar. (7) **Unit Test Suite**: Added `ChunkManagerStreamingTest.kt`, `TransferPacketSerializationTest.kt`, and `TransferMetricsTest.kt`. Marked Week 9 complete in `docs/Workflow.md`. |
+
 
 
 
