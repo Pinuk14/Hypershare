@@ -29,6 +29,7 @@ import kotlinx.coroutines.launch
 import java.net.DatagramPacket
 import java.net.DatagramSocket
 import java.net.InetAddress
+import java.net.InetSocketAddress
 import java.net.NetworkInterface
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicBoolean
@@ -249,7 +250,6 @@ class DiscoveryService : Service() {
                 val isSelf = host == null ||
                         isLocalDeviceAddress(host) ||
                         peerId == myPeerId ||
-                        displayName.trim().equals(myName.trim(), ignoreCase = true) ||
                         serviceInfo.serviceName.startsWith(localServiceName)
 
                 if (!isSelf && host != null) {
@@ -306,7 +306,11 @@ class DiscoveryService : Service() {
         udpJob = serviceScope.launch {
             try {
                 if (udpSocket == null || udpSocket?.isClosed == true) {
-                    udpSocket = DatagramSocket(UDP_PORT).apply { broadcast = true }
+                    udpSocket = DatagramSocket(null).apply {
+                        reuseAddress = true
+                        broadcast = true
+                        bind(InetSocketAddress(UDP_PORT))
+                    }
                 }
 
                 // Subnet packet receiver loop
@@ -338,13 +342,19 @@ class DiscoveryService : Service() {
                                     val senderIp = packet.address
 
                                     val myPeerId = UserIdentityManager.getInstance(this@DiscoveryService).getPeerId()
-                                    val myName = UserIdentityManager.getInstance(this@DiscoveryService).getUsername()
 
                                     val isSelf = peerId == myPeerId ||
-                                            displayName.trim().equals(myName.trim(), ignoreCase = true) ||
                                             isLocalDeviceAddress(senderIp)
 
                                     if (!isSelf && senderIp != null) {
+                                        // Immediately reply with a direct ping back to sender for instant mutual discovery
+                                        try {
+                                            val myUsername = UserIdentityManager.getInstance(this@DiscoveryService).getUsername()
+                                            val replyBytes = "HYPERSHARE_PING:$myPeerId:$myUsername".toByteArray(Charsets.UTF_8)
+                                            val replyPacket = DatagramPacket(replyBytes, replyBytes.size, senderIp, UDP_PORT)
+                                            udpSocket?.send(replyPacket)
+                                        } catch (_: Exception) {}
+
                                         // Remove any existing transient mDNS peer on this exact IP
                                         val existing = activePeers.values.find { it.ipAddress?.hostAddress == senderIp.hostAddress }
                                         if (existing != null && existing.peerId != peerId) {
@@ -397,11 +407,13 @@ class DiscoveryService : Service() {
             val bytes = pingMessage.toByteArray(Charsets.UTF_8)
 
             // 1. Broadcast to 255.255.255.255
-            val globalBroadcast = DatagramPacket(bytes, bytes.size, InetAddress.getByName("255.255.255.255"), UDP_PORT)
-            udpSocket?.send(globalBroadcast)
+            try {
+                val globalBroadcast = DatagramPacket(bytes, bytes.size, InetAddress.getByName("255.255.255.255"), UDP_PORT)
+                udpSocket?.send(globalBroadcast)
+            } catch (_: Exception) {}
 
-            // 2. Direct Subnet Broadcasts across local network interfaces
-            val interfaces = NetworkInterface.getNetworkInterfaces()
+            // 2. Direct Subnet Broadcasts across all local network interfaces
+            val interfaces = NetworkInterface.getNetworkInterfaces() ?: return
             while (interfaces.hasMoreElements()) {
                 val iface = interfaces.nextElement()
                 if (iface.isLoopback || !iface.isUp) continue
@@ -409,8 +421,10 @@ class DiscoveryService : Service() {
                 for (interfaceAddress in iface.interfaceAddresses) {
                     val broadcast = interfaceAddress.broadcast
                     if (broadcast != null) {
-                        val packet = DatagramPacket(bytes, bytes.size, broadcast, UDP_PORT)
-                        udpSocket?.send(packet)
+                        try {
+                            val packet = DatagramPacket(bytes, bytes.size, broadcast, UDP_PORT)
+                            udpSocket?.send(packet)
+                        } catch (_: Exception) {}
                     }
                 }
             }
@@ -480,6 +494,6 @@ class DiscoveryService : Service() {
         const val SERVICE_TYPE_PREFIX = "_hypershare"
         const val DEFAULT_PORT = 47200
         const val UDP_PORT = 47201
-        const val PEER_OFFLINE_TIMEOUT_MS = 6000L
+        const val PEER_OFFLINE_TIMEOUT_MS = 18000L
     }
 }

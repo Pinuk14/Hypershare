@@ -27,6 +27,14 @@ import androidx.compose.ui.unit.sp
 import com.hypershare.ui.components.GlassCard
 import com.hypershare.ui.components.StatusChip
 import com.hypershare.ui.theme.BackgroundBase
+import androidx.activity.compose.BackHandler
+import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.ui.graphics.Color
 import com.hypershare.ui.theme.ConnectedGreen
 import com.hypershare.ui.theme.MeshTeal
 import com.hypershare.ui.theme.SignalBlue
@@ -38,6 +46,10 @@ fun SecurityPlaygroundScreen(
     viewModel: SecurityPlaygroundViewModel,
     onBackClick: () -> Unit
 ) {
+    BackHandler {
+        onBackClick()
+    }
+
     val uiState by viewModel.uiState.collectAsState()
     val scrollState = rememberScrollState()
 
@@ -51,15 +63,30 @@ fun SecurityPlaygroundScreen(
                 .padding(16.dp)
                 .verticalScroll(scrollState)
         ) {
-            Text(
-                text = "Crypto & Protocol Playground",
-                style = MaterialTheme.typography.displayLarge
-            )
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Box(
+                    modifier = Modifier
+                        .size(36.dp)
+                        .background(Color(0x22FFFFFF), CircleShape)
+                        .clickable { onBackClick() },
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text("←", color = TextPrimary, fontSize = 20.sp, fontWeight = FontWeight.Bold)
+                }
+                Spacer(modifier = Modifier.width(12.dp))
+                Text(
+                    text = "Crypto & Protocol Playground",
+                    style = MaterialTheme.typography.displayLarge
+                )
+            }
             Text(
                 text = "Phase 0 Security & Binary Protocol Interactive Test UI",
                 color = TextSecondary,
                 fontSize = 12.sp,
-                modifier = Modifier.padding(bottom = 16.dp)
+                modifier = Modifier.padding(start = 48.dp, bottom = 16.dp)
             )
 
             // Section 1: ECDH Key Agreement

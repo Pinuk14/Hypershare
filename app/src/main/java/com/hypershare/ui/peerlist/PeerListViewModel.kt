@@ -99,11 +99,8 @@ class PeerListViewModel(
             val convs = withContext(Dispatchers.IO) {
                 repo.getAllConversations(myPeerId)
             }
-            val cleanMyName = myUsername.lowercase().replace(Regex("[^a-z0-9]"), "")
             dbConversations = convs.filterNot {
-                val cleanName = it.displayName.lowercase().replace(Regex("[^a-z0-9]"), "")
                 it.peerId == myPeerId ||
-                cleanName == cleanMyName ||
                 it.peerId == "local" ||
                 it.peerId.contains("(") ||
                 it.displayName.contains("(")
@@ -237,10 +234,7 @@ class PeerListViewModel(
         // 2. Add any newly discovered LAN peers not yet in database (Local Mode only)
         if (!isEmergency) {
             for (peer in _uiState.value.peers) {
-                val cleanPeerName = normalizeName(peer.displayName)
-                val alreadyInMap = itemsMap.values.any { 
-                    it.peerId == peer.peerId || normalizeName(it.displayName) == cleanPeerName 
-                }
+                val alreadyInMap = itemsMap.containsKey(peer.peerId)
                 if (!alreadyInMap) {
                     itemsMap[peer.peerId] = PeerUiItem(
                         peerId = peer.peerId,

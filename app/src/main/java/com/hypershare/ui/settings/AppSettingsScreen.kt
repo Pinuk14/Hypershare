@@ -39,6 +39,10 @@ import com.hypershare.ui.theme.MeshTeal
 import com.hypershare.ui.theme.SignalBlue
 import android.content.pm.ApplicationInfo
 import androidx.compose.ui.platform.LocalContext
+import androidx.activity.compose.BackHandler
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import com.hypershare.ui.theme.TextPrimary
 import com.hypershare.ui.theme.TextSecondary
 
@@ -47,8 +51,14 @@ fun AppSettingsScreen(
     viewModel: AppSettingsViewModel,
     onHomeClick: () -> Unit,
     onOpenAccountSettings: () -> Unit,
-    onOpenSecurityPlayground: () -> Unit
+    onOpenSecurityPlayground: () -> Unit,
+    onBackClick: () -> Unit = onHomeClick,
+    onOpenPeers: () -> Unit = onHomeClick
 ) {
+    BackHandler {
+        onBackClick()
+    }
+
     val uiState by viewModel.uiState.collectAsState()
     val context = LocalContext.current
 
@@ -63,7 +73,7 @@ fun AppSettingsScreen(
                         NavTab.HOME -> onHomeClick()
                         NavTab.ACCOUNT -> onOpenAccountSettings()
                         NavTab.SETTINGS -> {}
-                        NavTab.PEERS -> onHomeClick()
+                        NavTab.PEERS -> onOpenPeers()
                     }
                 },
                 onOpenAppSettings = {},
@@ -86,26 +96,36 @@ fun AppSettingsScreen(
                     .background(BackgroundBase)
             )
 
-            // Header Banner
+            // Header Banner with Back Arrow
             GlassCard(
                 modifier = Modifier
                     .fillMaxWidth()
                     .padding(horizontal = 16.dp, vertical = 8.dp),
                 cornerRadius = 16.dp
             ) {
-                Box(
+                Row(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .height(56.dp),
-                    contentAlignment = Alignment.Center
+                        .height(56.dp)
+                        .padding(horizontal = 14.dp),
+                    verticalAlignment = Alignment.CenterVertically
                 ) {
+                    Box(
+                        modifier = Modifier
+                            .size(36.dp)
+                            .background(Color(0x22FFFFFF), CircleShape)
+                            .clickable { onBackClick() },
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Text("←", color = TextPrimary, fontSize = 20.sp, fontWeight = FontWeight.Bold)
+                    }
+                    Spacer(modifier = Modifier.width(12.dp))
                     Text(
                         text = "APP SETTINGS",
                         color = TextPrimary,
-                        fontSize = 20.sp,
+                        fontSize = 18.sp,
                         fontWeight = FontWeight.Black,
-                        letterSpacing = 2.sp,
-                        modifier = Modifier.clickable { onHomeClick() }
+                        letterSpacing = 2.sp
                     )
                 }
             }

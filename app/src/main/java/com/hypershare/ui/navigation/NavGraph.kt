@@ -8,6 +8,7 @@ import android.content.pm.PackageManager
 import android.Manifest
 import android.os.Build
 import android.os.IBinder
+import androidx.activity.compose.BackHandler
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -79,6 +80,48 @@ fun HyperShareNavGraph(
     val context = LocalContext.current
     val backStack = rememberNavBackStack(HomeNavKey)
 
+    // Industry-grade back navigation primitives
+    fun popBack(): Boolean {
+        if (backStack.size > 1) {
+            backStack.removeLastOrNull()
+            return true
+        }
+        return false
+    }
+
+    fun navigateToHome() {
+        while (backStack.size > 1) {
+            backStack.removeLastOrNull()
+        }
+    }
+
+    fun navigateTopLevel(key: NavKey) {
+        if (backStack.lastOrNull() == key) return
+        if (key == HomeNavKey) {
+            navigateToHome()
+            return
+        }
+        val existingIndex = backStack.indexOf(key)
+        if (existingIndex >= 0) {
+            while (backStack.size > existingIndex + 1) {
+                backStack.removeLastOrNull()
+            }
+        } else {
+            navigateToHome()
+            backStack.add(key)
+        }
+    }
+
+    fun pushDestination(key: NavKey) {
+        if (backStack.lastOrNull() == key) return
+        backStack.add(key)
+    }
+
+    // System Gesture / Hardware Back Button Handler
+    BackHandler(enabled = backStack.size > 1) {
+        popBack()
+    }
+
     var discoveryService by remember { mutableStateOf<DiscoveryService?>(null) }
     var meshNetworkService by remember { mutableStateOf<MeshNetworkService?>(null) }
 
@@ -120,12 +163,12 @@ fun HyperShareNavGraph(
             val ip = peer?.ipAddress?.hostAddress ?: ""
             val port = peer?.port ?: 47200
 
-            // Add ChatNavKey for the notification's target peer
-            backStack.add(ChatNavKey(peerId = targetPeerId, peerName = peer?.displayName ?: "", peerIp = ip, peerPort = port))
+            // Ensure back from notification cleanly pops to Home
+            navigateToHome()
+            pushDestination(ChatNavKey(peerId = targetPeerId, peerName = peer?.displayName ?: "", peerIp = ip, peerPort = port))
             onPeerNavigated()
         }
     }
-
 
     DisposableEffect(context, networkPermissionsGranted) {
         if (!networkPermissionsGranted) {
@@ -174,7 +217,7 @@ fun HyperShareNavGraph(
 
     NavDisplay(
         backStack = backStack,
-        onBack = { backStack.removeLastOrNull() },
+        onBack = { popBack() },
         entryProvider = entryProvider {
             entry<HomeNavKey> {
                 val vm: HomeViewModel = viewModel()
@@ -182,16 +225,16 @@ fun HyperShareNavGraph(
                     viewModel = vm,
                     onOpenLocalModeChats = {
                         activateNetworkMode(PeerMode.MODE_1_WIFI)
-                        backStack.add(PeerListNavKey(PeerMode.MODE_1_WIFI))
+                        navigateTopLevel(PeerListNavKey(PeerMode.MODE_1_WIFI))
                     },
                     onOpenEmergencyModeChats = {
                         activateNetworkMode(PeerMode.MODE_2_MESH)
-                        backStack.add(PeerListNavKey(PeerMode.MODE_2_MESH))
+                        navigateTopLevel(PeerListNavKey(PeerMode.MODE_2_MESH))
                     },
-                    onOpenAppSettings = { backStack.add(AppSettingsNavKey) },
-                    onOpenAccountSettings = { backStack.add(AccountSettingsNavKey) },
-                    onOpenQrScanner = { backStack.add(QrScannerNavKey) },
-                    onOpenFileBrowser = { backStack.add(FileBrowserNavKey) }
+                    onOpenAppSettings = { navigateTopLevel(AppSettingsNavKey) },
+                    onOpenAccountSettings = { navigateTopLevel(AccountSettingsNavKey) },
+                    onOpenQrScanner = { pushDestination(QrScannerNavKey) },
+                    onOpenFileBrowser = { pushDestination(FileBrowserNavKey) }
                 )
             }
             entry<PeerListNavKey> { key ->
@@ -250,14 +293,14 @@ fun HyperShareNavGraph(
                         val ip = activePeer?.ipAddress?.hostAddress ?: convItem?.ipAddress ?: ""
                         val name = activePeer?.displayName ?: convItem?.displayName ?: ""
                         val port = activePeer?.port ?: convItem?.port ?: 47200
-                        backStack.add(ChatNavKey(peerId = peerId, peerName = name, peerIp = ip, peerPort = port))
+                        pushDestination(ChatNavKey(peerId = peerId, peerName = name, peerIp = ip, peerPort = port))
                     },
                     onWifiDirectPeerClick = { peer ->
                         val peerId = vm.uiState.value.wifiDirectPeerIds[peer.deviceAddress] ?: peer.deviceAddress
                         val connection = vm.uiState.value.wifiDirectConnection
                         if (connection.isConnected) {
                             val targetIp = if (connection.isGroupOwner) "" else connection.groupOwnerIpAddress.orEmpty()
-                            backStack.add(
+                            pushDestination(
                                 ChatNavKey(
                                     peerId = peerId,
                                     peerName = peer.deviceName.ifBlank { peer.deviceAddress },
@@ -268,9 +311,10 @@ fun HyperShareNavGraph(
                             meshNetworkService?.wifiDirectController?.connect(peer)
                         }
                     },
-                    onHomeClick = { backStack.add(HomeNavKey) },
-                    onOpenAppSettings = { backStack.add(AppSettingsNavKey) },
-                    onOpenAccountSettings = { backStack.add(AccountSettingsNavKey) },
+                    onHomeClick = { navigateToHome() },
+                    onBackClick = { popBack() },
+                    onOpenAppSettings = { navigateTopLevel(AppSettingsNavKey) },
+                    onOpenAccountSettings = { navigateTopLevel(AccountSettingsNavKey) },
                     onRefreshDiscovery = { discoveryService?.refreshDiscovery() },
                     onRefreshWifiDirectDiscovery = {
                         meshNetworkService?.wifiDirectController?.startPeerDiscovery()
@@ -303,7 +347,7 @@ fun HyperShareNavGraph(
 
                 ChatScreen(
                     viewModel = vm,
-                    onBackClick = { backStack.removeLastOrNull() },
+                    onBackClick = { popBack() },
                     onConnectWifiDirect = {
                         meshNetworkService?.requestConnectToPeer(key.peerId)
                     },
@@ -314,13 +358,13 @@ fun HyperShareNavGraph(
                 val vm: com.hypershare.ui.qrscanner.QrScannerViewModel = viewModel()
                 com.hypershare.ui.qrscanner.QrScannerScreen(
                     viewModel = vm,
-                    onBackClick = { backStack.removeLastOrNull() },
+                    onBackClick = { popBack() },
                     onOpenChat = { peerId ->
                         val activePeers = discoveryService?.getActivePeers() ?: emptyList()
                         val peer = activePeers.find { it.peerId == peerId }
                         val ip = peer?.ipAddress?.hostAddress ?: ""
                         val name = peer?.displayName ?: ""
-                        backStack.add(ChatNavKey(peerId = peerId, peerName = name, peerIp = ip, peerPort = peer?.port ?: 47200))
+                        pushDestination(ChatNavKey(peerId = peerId, peerName = name, peerIp = ip, peerPort = peer?.port ?: 47200))
                     }
                 )
             }
@@ -328,17 +372,27 @@ fun HyperShareNavGraph(
                 val vm: AccountSettingsViewModel = viewModel()
                 AccountSettingsScreen(
                     viewModel = vm,
-                    onHomeClick = { backStack.add(HomeNavKey) },
-                    onOpenAppSettings = { backStack.add(AppSettingsNavKey) }
+                    onHomeClick = { navigateToHome() },
+                    onBackClick = { popBack() },
+                    onOpenAppSettings = { navigateTopLevel(AppSettingsNavKey) },
+                    onOpenPeers = {
+                        activateNetworkMode(PeerMode.MODE_1_WIFI)
+                        navigateTopLevel(PeerListNavKey(PeerMode.MODE_1_WIFI))
+                    }
                 )
             }
             entry<AppSettingsNavKey> {
                 val vm: AppSettingsViewModel = viewModel()
                 AppSettingsScreen(
                     viewModel = vm,
-                    onOpenSecurityPlayground = { backStack.add(SecurityPlaygroundNavKey) },
-                    onHomeClick = { backStack.add(HomeNavKey) },
-                    onOpenAccountSettings = { backStack.add(AccountSettingsNavKey) }
+                    onOpenSecurityPlayground = { pushDestination(SecurityPlaygroundNavKey) },
+                    onHomeClick = { navigateToHome() },
+                    onBackClick = { popBack() },
+                    onOpenAccountSettings = { navigateTopLevel(AccountSettingsNavKey) },
+                    onOpenPeers = {
+                        activateNetworkMode(PeerMode.MODE_1_WIFI)
+                        navigateTopLevel(PeerListNavKey(PeerMode.MODE_1_WIFI))
+                    }
                 )
             }
             entry<FileBrowserNavKey> {
@@ -347,35 +401,35 @@ fun HyperShareNavGraph(
                 FileBrowserScreen(
                     viewModel = vm,
                     peers = activePeers,
-                    onBackClick = { backStack.removeLastOrNull() }
+                    onBackClick = { popBack() }
                 )
             }
             entry<StreamPlayerNavKey> {
                 val vm: StreamPlayerViewModel = viewModel()
                 StreamPlayerScreen(
                     viewModel = vm,
-                    onBackClick = { backStack.removeLastOrNull() }
+                    onBackClick = { popBack() }
                 )
             }
             entry<ModeToggleNavKey> {
                 val vm: ModeToggleViewModel = viewModel()
                 ModeToggleScreen(
                     viewModel = vm,
-                    onDismiss = { backStack.removeLastOrNull() }
+                    onDismiss = { popBack() }
                 )
             }
             entry<RoutingDebugNavKey> {
                 val vm: RoutingDebugViewModel = viewModel()
                 RoutingDebugScreen(
                     viewModel = vm,
-                    onBackClick = { backStack.removeLastOrNull() }
+                    onBackClick = { popBack() }
                 )
             }
             entry<SecurityPlaygroundNavKey> {
                 val vm: SecurityPlaygroundViewModel = viewModel()
                 SecurityPlaygroundScreen(
                     viewModel = vm,
-                    onBackClick = { backStack.removeLastOrNull() }
+                    onBackClick = { popBack() }
                 )
             }
             entry<GroupListNavKey> {
@@ -383,9 +437,9 @@ fun HyperShareNavGraph(
                 GroupListScreen(
                     viewModel = vm,
                     onGroupClick = { groupId ->
-                        backStack.add(GroupChatNavKey(groupId = groupId))
+                        pushDestination(GroupChatNavKey(groupId = groupId))
                     },
-                    onBackClick = { backStack.removeLastOrNull() }
+                    onBackClick = { popBack() }
                 )
             }
             entry<GroupChatNavKey> { key ->
@@ -395,7 +449,7 @@ fun HyperShareNavGraph(
                 }
                 GroupChatScreen(
                     viewModel = vm,
-                    onBackClick = { backStack.removeLastOrNull() }
+                    onBackClick = { popBack() }
                 )
             }
         }

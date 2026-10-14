@@ -15,7 +15,9 @@
 .cxx
 local.properties
 screenshots/
+/screenshots/
+screenshots/*
+screenshot.png
 *.db
 *.sqlite
-*.b64
-screenshot.png
+*.b64

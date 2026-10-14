@@ -3,6 +3,7 @@ package com.hypershare.ui.qrscanner
 import android.Manifest
 import android.content.pm.PackageManager
 import android.util.Size
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.camera.core.CameraSelector
@@ -82,6 +83,10 @@ fun QrScannerScreen(
     onBackClick: () -> Unit,
     onOpenChat: (String) -> Unit
 ) {
+    BackHandler {
+        onBackClick()
+    }
+
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
     val uiState by viewModel.uiState.collectAsState()

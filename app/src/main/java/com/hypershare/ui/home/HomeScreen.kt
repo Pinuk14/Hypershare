@@ -13,6 +13,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBars
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.windowInsetsTopHeight
@@ -42,7 +43,9 @@ import com.hypershare.ui.components.StatusChipState
 import com.hypershare.ui.theme.BackgroundBase
 import com.hypershare.ui.theme.ConnectedGreen
 import com.hypershare.ui.theme.ErrorRed
+import com.hypershare.ui.theme.SignalBlue
 import com.hypershare.ui.theme.TextPrimary
+import com.hypershare.ui.theme.TextSecondary
 
 @Composable
 fun HomeScreen(

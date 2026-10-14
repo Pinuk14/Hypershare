@@ -52,6 +52,7 @@ import com.hypershare.ui.theme.BackgroundBase
 import com.hypershare.ui.theme.ConnectedGreen
 import com.hypershare.ui.theme.ErrorRed
 import com.hypershare.ui.theme.SignalBlue
+import androidx.activity.compose.BackHandler
 import com.hypershare.ui.theme.TextPrimary
 import com.hypershare.ui.theme.TextSecondary
 
@@ -65,8 +66,13 @@ fun PeerListScreen(
     onOpenAccountSettings: () -> Unit,
     onRefreshDiscovery: (() -> Unit)? = null,
     onWifiDirectPeerClick: (WifiP2pDevice) -> Unit = {},
-    onRefreshWifiDirectDiscovery: (() -> Unit)? = null
+    onRefreshWifiDirectDiscovery: (() -> Unit)? = null,
+    onBackClick: () -> Unit = onHomeClick
 ) {
+    BackHandler {
+        onBackClick()
+    }
+
     val uiState by viewModel.uiState.collectAsState()
     val pullToRefreshState = rememberPullToRefreshState()
     val context = androidx.compose.ui.platform.LocalContext.current
@@ -129,20 +135,30 @@ fun PeerListScreen(
                         modifier = Modifier
                             .fillMaxWidth()
                             .height(56.dp)
-                            .padding(horizontal = 16.dp),
+                            .padding(horizontal = 14.dp),
                         horizontalArrangement = Arrangement.SpaceBetween,
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         Row(verticalAlignment = Alignment.CenterVertically) {
+                            Box(
+                                modifier = Modifier
+                                    .size(36.dp)
+                                    .background(Color(0x22FFFFFF), CircleShape)
+                                    .clickable { onBackClick() },
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Text("←", color = TextPrimary, fontSize = 20.sp, fontWeight = FontWeight.Bold)
+                            }
+                            Spacer(modifier = Modifier.width(10.dp))
                             Text(
                                 text = "HYPERSHARE",
                                 color = TextPrimary,
-                                fontSize = 20.sp,
+                                fontSize = 18.sp,
                                 fontWeight = FontWeight.Black,
                                 letterSpacing = 2.sp,
                                 modifier = Modifier.clickable { onHomeClick() }
                             )
-                            Spacer(modifier = Modifier.width(10.dp))
+                            Spacer(modifier = Modifier.width(8.dp))
                             StatusChip(
                                 state = if (uiState.currentMode == PeerMode.MODE_1_WIFI) StatusChipState.WIFI else StatusChipState.MESH
                             )

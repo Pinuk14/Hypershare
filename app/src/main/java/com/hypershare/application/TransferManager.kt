@@ -29,6 +29,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -114,10 +115,15 @@ class TransferManager private constructor() {
 
         @Volatile private var INSTANCE: TransferManager? = null
 
-        fun getInstance(): TransferManager =
-            INSTANCE ?: synchronized(this) {
+        fun getInstance(context: Context? = null): TransferManager {
+            val instance = INSTANCE ?: synchronized(this) {
                 INSTANCE ?: TransferManager().also { INSTANCE = it }
             }
+            if (context != null) {
+                instance.init(context)
+            }
+            return instance
+        }
     }
 
     fun init(context: Context) {
@@ -144,13 +150,17 @@ class TransferManager private constructor() {
         fileUri: Uri,
         targetPeerId: String,
         targetIp: String = "",
-        isViewOnly: Boolean = false
+        isViewOnly: Boolean = false,
+        context: Context? = null
     ): String {
-        val context = appContext ?: throw IllegalStateException("TransferManager not initialized")
+        if (context != null && appContext == null) {
+            init(context)
+        }
+        val resolvedContext = appContext ?: context?.applicationContext ?: throw IllegalStateException("TransferManager not initialized")
         val transferId = UUID.randomUUID().toString()
-        val localPeerId = UserIdentityManager.getInstance(context).getPeerId()
+        val localPeerId = UserIdentityManager.getInstance(resolvedContext).getPeerId()
 
-        val (fileName, fileSize, mimeType) = resolveFileMetadata(context, fileUri)
+        val (fileName, fileSize, mimeType) = resolveFileMetadata(resolvedContext, fileUri)
         val totalChunks = ((fileSize + ChunkManager.CHUNK_SIZE - 1) / ChunkManager.CHUNK_SIZE).toInt().coerceAtLeast(1)
 
         val job = TransferJob(
@@ -292,7 +302,7 @@ class TransferManager private constructor() {
             }
 
             // Step 4: Wait for all chunks to be ACKed
-            while (ackMap.isNotEmpty() && isActive) {
+            while (ackMap.isNotEmpty() && currentCoroutineContext().isActive) {
                 delay(100)
             }
             outboundAckMaps.remove(transferId)
@@ -755,14 +765,38 @@ class TransferManager private constructor() {
         var size = 0L
         val mime = context.contentResolver.getType(uri) ?: "*/*"
 
-        context.contentResolver.query(uri, null, null, null, null)?.use { cursor ->
-            val nameIdx = cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME)
-            val sizeIdx = cursor.getColumnIndex(OpenableColumns.SIZE)
-            if (cursor.moveToFirst()) {
-                if (nameIdx != -1) name = cursor.getString(nameIdx)
-                if (sizeIdx != -1) size = cursor.getLong(sizeIdx)
+        try {
+            context.contentResolver.query(uri, null, null, null, null)?.use { cursor ->
+                val nameIdx = cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME)
+                val sizeIdx = cursor.getColumnIndex(OpenableColumns.SIZE)
+                if (cursor.moveToFirst()) {
+                    if (nameIdx != -1) {
+                        cursor.getString(nameIdx)?.let { name = it }
+                    }
+                    if (sizeIdx != -1) {
+                        size = cursor.getLong(sizeIdx)
+                    }
+                }
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed resolving metadata for $uri from cursor", e)
+        }
+
+        // Fallback for providers that return 0 or null for OpenableColumns.SIZE (e.g. some document providers or PDFs)
+        if (size <= 0L) {
+            try {
+                context.contentResolver.openFileDescriptor(uri, "r")?.use { pfd ->
+                    val statSize = pfd.statSize
+                    if (statSize > 0L) {
+                        size = statSize
+                    }
+                }
+            } catch (e: Exception) {
+                Log.w(TAG, "Failed resolving file size from openFileDescriptor for $uri", e)
             }
         }
+
+        if (size < 0L) size = 0L
         return Triple(name, size, mime)
     }
 

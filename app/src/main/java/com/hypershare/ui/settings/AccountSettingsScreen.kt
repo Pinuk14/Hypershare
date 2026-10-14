@@ -40,6 +40,7 @@ import com.hypershare.ui.components.BottomNavBar
 import com.hypershare.ui.components.GlassCard
 import com.hypershare.ui.components.NavTab
 import com.hypershare.ui.components.QrCodeCard
+import androidx.activity.compose.BackHandler
 import com.hypershare.ui.theme.BackgroundBase
 import com.hypershare.ui.theme.ConnectedGreen
 import com.hypershare.ui.theme.SignalBlue
@@ -51,8 +52,14 @@ import com.hypershare.ui.theme.TextSecondary
 fun AccountSettingsScreen(
     viewModel: AccountSettingsViewModel,
     onHomeClick: () -> Unit,
-    onOpenAppSettings: () -> Unit
+    onOpenAppSettings: () -> Unit,
+    onBackClick: () -> Unit = onHomeClick,
+    onOpenPeers: () -> Unit = onHomeClick
 ) {
+    BackHandler {
+        onBackClick()
+    }
+
     val uiState by viewModel.uiState.collectAsState()
     var editingUsername by remember(uiState.username) { mutableStateOf(uiState.username) }
 
@@ -67,7 +74,7 @@ fun AccountSettingsScreen(
                         NavTab.HOME -> onHomeClick()
                         NavTab.SETTINGS -> onOpenAppSettings()
                         NavTab.ACCOUNT -> {}
-                        NavTab.PEERS -> onHomeClick()
+                        NavTab.PEERS -> onOpenPeers()
                     }
                 },
                 onOpenAppSettings = onOpenAppSettings,
@@ -90,26 +97,36 @@ fun AccountSettingsScreen(
                     .background(BackgroundBase)
             )
 
-            // Header Banner
+            // Header Banner with Back Button
             GlassCard(
                 modifier = Modifier
                     .fillMaxWidth()
                     .padding(horizontal = 16.dp, vertical = 8.dp),
                 cornerRadius = 16.dp
             ) {
-                Box(
+                Row(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .height(56.dp),
-                    contentAlignment = Alignment.Center
+                        .height(56.dp)
+                        .padding(horizontal = 14.dp),
+                    verticalAlignment = Alignment.CenterVertically
                 ) {
+                    Box(
+                        modifier = Modifier
+                            .size(36.dp)
+                            .background(Color(0x22FFFFFF), CircleShape)
+                            .clickable { onBackClick() },
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Text("←", color = TextPrimary, fontSize = 20.sp, fontWeight = FontWeight.Bold)
+                    }
+                    Spacer(modifier = Modifier.width(12.dp))
                     Text(
                         text = "ACCOUNT PROFILE",
                         color = TextPrimary,
-                        fontSize = 20.sp,
+                        fontSize = 18.sp,
                         fontWeight = FontWeight.Black,
-                        letterSpacing = 2.sp,
-                        modifier = Modifier.clickable { onHomeClick() }
+                        letterSpacing = 2.sp
                     )
                 }
             }

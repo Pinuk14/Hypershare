@@ -51,17 +51,25 @@ import com.hypershare.ui.theme.SurfaceCard
 import com.hypershare.ui.theme.TextPrimary
 import com.hypershare.ui.theme.TextSecondary
 import com.hypershare.ui.theme.WarningAmber
+import com.hypershare.model.TransferState
+import com.hypershare.model.TransferJob
+import com.hypershare.application.TransferManager
 
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import android.net.Uri
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.DropdownMenu
+import androidx.compose.foundation.border
 import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.IconButton
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.draw.clip
+import androidx.activity.compose.BackHandler
 import com.hypershare.ui.components.AmbientMeshGraphCanvas
 
 @Composable
@@ -75,9 +83,52 @@ fun ChatScreen(
     var showMenu by remember { mutableStateOf(false) }
     var showSecurityInfo by remember { mutableStateOf(false) }
 
-    val displayMessages = uiState.messages.distinctBy { it.id }
+    // Intercept back gesture: dismiss modals before exiting chat
+    BackHandler {
+        when {
+            showSecurityInfo -> showSecurityInfo = false
+            showMenu -> showMenu = false
+            else -> onBackClick()
+        }
+    }
 
+    val context = androidx.compose.ui.platform.LocalContext.current
+    val displayMessages = uiState.messages.distinctBy { it.id }
     val listState = rememberLazyListState()
+
+    // Observe active file transfers for this peer
+    val allTransferJobs by TransferManager.getInstance(context).jobs.collectAsState()
+    val peerTransferJob = allTransferJobs.firstOrNull { job ->
+        (job.destinationPeerId == uiState.peerId || job.sourcePeerId == uiState.peerId) &&
+        (job.state == TransferState.IN_PROGRESS || job.state == TransferState.QUEUED)
+    }
+
+    val chatFilePickerLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.OpenDocument()
+    ) { uri: Uri? ->
+        if (uri != null && uiState.peerId.isNotEmpty()) {
+            try {
+                context.contentResolver.takePersistableUriPermission(
+                    uri,
+                    android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION
+                )
+            } catch (_: Exception) {}
+
+            val resolvedIp = uiState.peerIpAddress.ifEmpty {
+                com.hypershare.service.LanSocketManager.getInstance().getPeerIp(uiState.peerId)
+            }
+            try {
+                TransferManager.getInstance(context).startSendTransfer(
+                    fileUri = uri,
+                    targetPeerId = uiState.peerId,
+                    targetIp = resolvedIp,
+                    context = context
+                )
+            } catch (e: Exception) {
+                android.util.Log.e("ChatScreen", "Failed to start transfer for $uri", e)
+            }
+        }
+    }
 
     // Register active chat room with LanSocketManager to suppress notifications and send READ_ACKs
     androidx.compose.runtime.DisposableEffect(uiState.peerId) {
@@ -201,6 +252,13 @@ fun ChatScreen(
                             onDismissRequest = { showMenu = false },
                             modifier = Modifier.background(SurfaceCard)
                         ) {
+                            DropdownMenuItem(
+                                text = { Text("⚡ Send File (Quick Share)", color = SignalBlue, fontSize = 13.sp, fontWeight = FontWeight.Bold) },
+                                onClick = {
+                                    showMenu = false
+                                    chatFilePickerLauncher.launch(arrayOf("*/*"))
+                                }
+                            )
                             DropdownMenuItem(
                                 text = { Text("Clear Local Chat", color = TextPrimary, fontSize = 13.sp) },
                                 onClick = {
@@ -386,19 +444,62 @@ fun ChatScreen(
                 }
             }
 
-            // 6. Glassmorphic Bottom Input Bar
-            val chatFilePickerLauncher = rememberLauncherForActivityResult(
-                contract = ActivityResultContracts.OpenDocument()
-            ) { uri: Uri? ->
-                if (uri != null && uiState.peerId.isNotEmpty()) {
-                    com.hypershare.application.TransferManager.getInstance().startSendTransfer(
-                        fileUri = uri,
-                        targetPeerId = uiState.peerId,
-                        targetIp = uiState.peerIpAddress
-                    )
+            // Active File Transfer Card (Live progress, speed gauge, ETA)
+            if (peerTransferJob != null) {
+                val job = peerTransferJob
+                val progress = job.progress
+                val speedFormatted = TransferManager.getInstance().formatSpeed(job.currentSpeedBps)
+
+                GlassCard(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp, vertical = 4.dp)
+                ) {
+                    Column(modifier = Modifier.padding(12.dp)) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Row(
+                                modifier = Modifier.weight(1f),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text("⚡", fontSize = 16.sp)
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text(
+                                    text = "${if (job.isOutgoing) "Sending" else "Receiving"} ${job.fileName}",
+                                    color = TextPrimary,
+                                    fontSize = 12.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    maxLines = 1,
+                                    overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
+                                )
+                            }
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text(
+                                text = "${(progress * 100).toInt()}% • $speedFormatted",
+                                color = SignalBlue,
+                                fontSize = 11.sp,
+                                fontFamily = FontFamily.Monospace,
+                                fontWeight = FontWeight.Bold
+                            )
+                        }
+                        Spacer(modifier = Modifier.height(6.dp))
+                        LinearProgressIndicator(
+                            progress = { progress },
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(4.dp)
+                                .clip(RoundedCornerShape(2.dp)),
+                            color = SignalBlue,
+                            trackColor = Color(0x33FFFFFF)
+                        )
+                    }
                 }
             }
 
+            // 6. Glassmorphic Bottom Input Bar
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -406,18 +507,6 @@ fun ChatScreen(
                     .padding(horizontal = 16.dp, vertical = 8.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Box(
-                    modifier = Modifier
-                        .size(42.dp)
-                        .background(Color(0x1AFFFFFF), CircleShape)
-                        .clickable { chatFilePickerLauncher.launch(arrayOf("*/*")) },
-                    contentAlignment = Alignment.Center
-                ) {
-                    Text("📎", fontSize = 18.sp)
-                }
-
-                Spacer(modifier = Modifier.width(6.dp))
-
                 OutlinedTextField(
                     value = uiState.inputText,
                     onValueChange = { viewModel.updateInputText(it) },
@@ -443,6 +532,24 @@ fun ChatScreen(
                     ),
                     modifier = Modifier.weight(1f)
                 )
+
+                Spacer(modifier = Modifier.width(8.dp))
+
+                // File Transfer / Quick Share Button (Near send button)
+                IconButton(
+                    onClick = { chatFilePickerLauncher.launch(arrayOf("*/*")) },
+                    modifier = Modifier
+                        .size(46.dp)
+                        .background(
+                            brush = androidx.compose.ui.graphics.Brush.linearGradient(
+                                colors = listOf(Color(0xFF2A3B5C), Color(0xFF1E293B))
+                            ),
+                            shape = CircleShape
+                        )
+                        .border(1.dp, SignalBlue.copy(alpha = 0.5f), CircleShape)
+                ) {
+                    Text("📁", fontSize = 20.sp)
+                }
 
                 Spacer(modifier = Modifier.width(6.dp))
 

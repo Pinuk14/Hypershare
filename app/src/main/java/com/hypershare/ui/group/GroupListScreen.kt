@@ -47,6 +47,7 @@ import com.hypershare.ui.theme.ConnectedGreen
 import com.hypershare.ui.theme.MeshTeal
 import com.hypershare.ui.theme.SignalBlue
 import com.hypershare.ui.theme.TextPrimary
+import androidx.activity.compose.BackHandler
 import com.hypershare.ui.theme.TextSecondary
 import com.hypershare.ui.theme.WarningAmber
 
@@ -58,6 +59,15 @@ fun GroupListScreen(
 ) {
     val uiState by viewModel.uiState.collectAsState()
     var showCreateSheet by remember { mutableStateOf(false) }
+
+    // Intercept back: dismiss bottom sheet if open, else pop back
+    BackHandler {
+        if (showCreateSheet) {
+            showCreateSheet = false
+        } else {
+            onBackClick()
+        }
+    }
 
     Scaffold(
         containerColor = BackgroundBase,

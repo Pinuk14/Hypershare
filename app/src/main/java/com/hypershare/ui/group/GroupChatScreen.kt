@@ -57,6 +57,7 @@ import com.hypershare.ui.theme.BackgroundBase
 import com.hypershare.ui.theme.ConnectedGreen
 import com.hypershare.ui.theme.MeshTeal
 import com.hypershare.ui.theme.SignalBlue
+import androidx.activity.compose.BackHandler
 import com.hypershare.ui.theme.SurfaceCard
 import com.hypershare.ui.theme.TextPrimary
 import com.hypershare.ui.theme.TextSecondary
@@ -70,6 +71,15 @@ fun GroupChatScreen(
 ) {
     val uiState by viewModel.uiState.collectAsState()
     var showMenu by remember { mutableStateOf(false) }
+
+    // Intercept back: dismiss menu if open, else pop back
+    BackHandler {
+        if (showMenu) {
+            showMenu = false
+        } else {
+            onBackClick()
+        }
+    }
     val listState = rememberLazyListState()
     val localUserId = viewModel.getLocalUserId()
 

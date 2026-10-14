@@ -69,6 +69,10 @@ class LanSocketManager private constructor() {
     val incomingTransferPacketsFlow: SharedFlow<Packet> = _incomingTransferPacketsFlow.asSharedFlow()
 
     fun nextSequenceNumber(): Int = sequenceCounter.getAndIncrement()
+
+    fun getPeerIp(peerId: String): String {
+        return activeSockets[peerId]?.inetAddress?.hostAddress ?: ""
+    }
     data class PendingOutboundMessage(
         val msgId: String,
         val targetPeerId: String,
@@ -730,6 +734,9 @@ class LanSocketManager private constructor() {
             } catch (e: Exception) {
                 Log.e(TAG, "Failed to send CONTACT_ACCEPT to $targetPeerId: ${e.message}")
             }
+        }
+    }
+
     fun sendPacket(packet: Packet, targetPeerId: String, targetIp: String = "") {
         scope.launch {
             try {

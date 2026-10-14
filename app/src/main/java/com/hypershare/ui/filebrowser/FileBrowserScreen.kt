@@ -2,6 +2,7 @@ package com.hypershare.ui.filebrowser
 
 import android.content.Intent
 import android.net.Uri
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
@@ -85,6 +86,16 @@ fun FileBrowserScreen(
     onBackClick: () -> Unit
 ) {
     val uiState by viewModel.uiState.collectAsState()
+
+    // Dismiss active modals or prompts before exiting
+    BackHandler {
+        when {
+            uiState.latestCompletedEvent != null -> viewModel.dismissCompletionDialog()
+            uiState.incomingPrompt != null -> viewModel.rejectIncomingTransfer(uiState.incomingPrompt!!.transferId)
+            else -> onBackClick()
+        }
+    }
+
     val activeJobs by viewModel.transferJobs.collectAsState()
     val context = LocalContext.current
 
@@ -144,7 +155,6 @@ fun FileBrowserScreen(
                         )
                     }
                     StatusChip(
-                        status = "READY",
                         state = StatusChipState.CONNECTED
                     )
                 }
@@ -525,10 +535,9 @@ fun TransferProgressCard(
                 }
 
                 StatusChip(
-                    status = job.state.name,
                     state = when (job.state) {
                         TransferState.COMPLETED -> StatusChipState.CONNECTED
-                        TransferState.FAILED -> StatusChipState.ERROR
+                        TransferState.FAILED -> StatusChipState.LOST
                         TransferState.IN_PROGRESS -> StatusChipState.CONNECTED
                         else -> StatusChipState.CONNECTING
                     }
