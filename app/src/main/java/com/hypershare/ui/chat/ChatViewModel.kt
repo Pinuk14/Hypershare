@@ -32,7 +32,10 @@ data class ChatMessageItem(
     val mediaType: String? = null, // "video", "image", "audio", "document"
     val mediaName: String? = null,
     val mediaSize: Long = 0L,
-    val transferId: String? = null
+    val transferId: String? = null,
+    val isEmergency: Boolean = false,
+    val avgSpeedBps: Long = 0L,
+    val transferDurationMs: Long = 0L
 )
 
 data class ChatUiState(
@@ -44,7 +47,8 @@ data class ChatUiState(
     val hasPeerAcceptedUs: Boolean = false,
     val untrustedOutgoingCount: Int = 0,
     val messages: List<ChatMessageItem> = emptyList(),
-    val inputText: String = ""
+    val inputText: String = "",
+    val isEmergencyMode: Boolean = false
 )
 
 class ChatViewModel(app: Application) : AndroidViewModel(app) {
@@ -74,12 +78,13 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
 
         val resolvedIp = targetIp.ifEmpty { lanSocketMgr?.getPeerIp(peerId) ?: "" }
 
-        // Reset UI state immediately to prevent showing previous peer's messages
+        // Reset UI state immediately to prevent showing previous peer's messages while preserving isEmergencyMode
         _uiState.value = ChatUiState(
             peerId = peerId,
             peerName = initialName,
             peerIpAddress = resolvedIp,
-            messages = emptyList()
+            messages = emptyList(),
+            isEmergencyMode = _uiState.value.isEmergencyMode
         )
 
         // Load persisted history, display name, trust status, peer acceptance, and outgoing count from SQLite on IO thread
@@ -296,6 +301,10 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
         _uiState.value = _uiState.value.copy(inputText = capped)
     }
 
+    fun setEmergencyMode(isEmergency: Boolean) {
+        _uiState.value = _uiState.value.copy(isEmergencyMode = isEmergency)
+    }
+
     fun sendMessage() {
         val rawText = _uiState.value.inputText.trim()
         if (rawText.isEmpty()) return
@@ -312,12 +321,14 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
         val text = if (!isMutualTrust && rawText.length > 300) rawText.take(300) else rawText
 
         val msgId = java.util.UUID.randomUUID().toString()
+        val isEmergency = _uiState.value.isEmergencyMode || _uiState.value.peerIpAddress.startsWith("192.168.49.")
         val newMessage = ChatMessageItem(
             id = msgId,
             senderId = myPeerId,
             text = text,
             isOutgoing = true,
-            status = MessageStatus.SENT
+            status = MessageStatus.SENT,
+            isEmergency = isEmergency
         )
 
         val updatedList = (_uiState.value.messages + newMessage).distinctBy { it.id }

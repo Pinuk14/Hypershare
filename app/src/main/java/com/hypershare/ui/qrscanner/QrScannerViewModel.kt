@@ -60,7 +60,21 @@ class QrScannerViewModel(app: Application) : AndroidViewModel(app) {
             if (isValid) {
                 val pubKeyBase64 = java.util.Base64.getEncoder().encodeToString(card.publicKey)
                 withContext(Dispatchers.IO) {
-                    repository.savePeer(card.userId, card.displayName, isTrusted = true, hasPeerAccepted = true, publicKey = pubKeyBase64)
+                    repository.savePeer(
+                        peerId = card.userId,
+                        displayName = card.displayName,
+                        isTrusted = true,
+                        hasPeerAccepted = true,
+                        publicKey = pubKeyBase64,
+                        p2pMac = card.p2pMac
+                    )
+                    card.p2pMac?.let { mac ->
+                        val prefs = getApplication<android.app.Application>().getSharedPreferences("hypershare_p2p_mappings", android.content.Context.MODE_PRIVATE)
+                        prefs.edit()
+                            .putString("peer:${card.userId}", mac)
+                            .putString("mac:$mac", card.userId)
+                            .apply()
+                    }
                     // If target peer is reachable on LAN, send CONTACT_ACCEPT so both devices are instantly mutually paired in both modes
                     val targetIp = com.hypershare.service.LanSocketManager.getInstance().getPeerIp(card.userId)
                     if (targetIp.isNotEmpty()) {

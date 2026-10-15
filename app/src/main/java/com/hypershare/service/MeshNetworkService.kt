@@ -15,6 +15,10 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
 
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
+
 class MeshNetworkService : Service() {
 
     private val binder = LocalBinder()
@@ -22,8 +26,17 @@ class MeshNetworkService : Service() {
     val lanSocketManager = LanSocketManager.getInstance()
     lateinit var wifiDirectController: WifiDirectController
         private set
-    var activeMode: PeerMode? = null
-        private set
+
+    private val _activeModeFlow = MutableStateFlow<PeerMode?>(null)
+    val activeModeFlow: StateFlow<PeerMode?> = _activeModeFlow.asStateFlow()
+
+    var activeMode: PeerMode?
+        get() = _activeModeFlow.value
+        private set(value) {
+            _activeModeFlow.value = value
+            lanSocketManager.isEmergencyActive = (value == PeerMode.MODE_2_MESH)
+        }
+
     private var hadP2pConnection = false
 
     inner class LocalBinder : Binder() {
@@ -135,6 +148,7 @@ class MeshNetworkService : Service() {
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         val mode = intent?.getStringExtra(EXTRA_MODE)
             ?.let { runCatching { PeerMode.valueOf(it) }.getOrNull() }
+            ?: activeMode
             ?: PeerMode.MODE_1_WIFI
         if (mode != activeMode) {
             if (mode == PeerMode.MODE_1_WIFI) {
@@ -174,31 +188,82 @@ class MeshNetworkService : Service() {
     fun requestConnectToPeer(peerId: String) {
         if (activeMode != PeerMode.MODE_2_MESH) return
         val connState = wifiDirectController.connectionState.value
-        if (connState.isConnected || connState.isConnecting) return
+        if (connState.isConnected) {
+            // Already connected to P2P group: if client, ensure TCP socket is established
+            if (!connState.isGroupOwner && connState.groupOwnerIpAddress != null) {
+                val myPeerId = UserIdentityManager.getInstance(this).getPeerId()
+                lanSocketManager.connectToPeer(
+                    targetIp = connState.groupOwnerIpAddress,
+                    port = PORT,
+                    senderPeerId = myPeerId
+                )
+            }
+            return
+        }
+        if (connState.isConnecting) return
 
-        val candidatePeers = wifiDirectController.discoveredPeers.value.filter {
-            !wifiDirectController.isBlacklistedDevice(it.deviceName)
-        }
-        val mac = wifiDirectController.getRememberedMacForPeer(peerId)
-        val candidate = if (mac != null) {
-            candidatePeers.find { it.deviceAddress == mac }
-        } else {
-            val repository = com.hypershare.db.MessageRepository(this)
+        // Ensure discovery is active
+        wifiDirectController.startPeerDiscovery()
+
+        serviceScope.launch {
+            val repository = com.hypershare.db.MessageRepository(this@MeshNetworkService)
+            val mac = wifiDirectController.getRememberedMacForPeer(peerId)
             val name = repository.getPeerDisplayName(peerId).orEmpty().lowercase().replace(Regex("[^a-z0-9]"), "")
-            candidatePeers.find { 
-                val cleanName = it.deviceName.lowercase().replace(Regex("[^a-z0-9]"), "")
-                cleanName.isNotEmpty() && (cleanName.contains(name) || name.contains(cleanName))
-            } ?: candidatePeers.singleOrNull()
+            val myPeerId = UserIdentityManager.getInstance(this@MeshNetworkService).getPeerId()
+
+            // Poll discovered peers for up to 10 seconds
+            var attempts = 0
+            while (attempts < 12 && activeMode == PeerMode.MODE_2_MESH) {
+                val state = wifiDirectController.connectionState.value
+                if (state.isConnected || state.isConnecting) break
+
+                val candidatePeers = wifiDirectController.discoveredPeers.value.filter {
+                    !wifiDirectController.isBlacklistedDevice(it.deviceName)
+                }
+
+                val candidate = if (mac != null) {
+                    candidatePeers.find { it.deviceAddress == mac }
+                } else {
+                    candidatePeers.find { 
+                        val cleanName = it.deviceName.lowercase().replace(Regex("[^a-z0-9]"), "")
+                        cleanName.isNotEmpty() && (cleanName.contains(name) || name.contains(cleanName))
+                    } ?: candidatePeers.singleOrNull()
+                }
+
+                if (candidate != null) {
+                    val goIntent = wifiDirectController.calculateGoIntent(
+                        targetMac = candidate.deviceAddress,
+                        myPeerId = myPeerId,
+                        targetPeerId = peerId
+                    )
+                    wifiDirectController.autoConnectToPeer(candidate, preferredIntent = goIntent)
+                    break
+                }
+
+                attempts++
+                kotlinx.coroutines.delay(800)
+            }
         }
-        if (candidate != null) {
-            val myPeerId = UserIdentityManager.getInstance(this).getPeerId()
-            val goIntent = wifiDirectController.calculateGoIntent(
-                targetMac = candidate.deviceAddress,
-                myPeerId = myPeerId,
-                targetPeerId = peerId
-            )
-            wifiDirectController.autoConnectToPeer(candidate, preferredIntent = goIntent)
+    }
+
+    fun requestConnectToDevice(deviceAddress: String, peerId: String = "") {
+        if (activeMode != PeerMode.MODE_2_MESH) return
+        val myPeerId = UserIdentityManager.getInstance(this).getPeerId()
+        if (peerId.isNotEmpty()) {
+            wifiDirectController.associateSelectedPeerId(peerId, deviceAddress)
         }
+        val goIntent = wifiDirectController.calculateGoIntent(
+            targetMac = deviceAddress,
+            myPeerId = myPeerId,
+            targetPeerId = peerId
+        )
+        wifiDirectController.connect(deviceAddress, preferredIntent = goIntent)
+    }
+
+    fun disconnectWifiDirect(onComplete: (() -> Unit)? = null) {
+        lanSocketManager.closeActiveConnections()
+        hadP2pConnection = false
+        wifiDirectController.disconnect(onComplete)
     }
 
     override fun onDestroy() {

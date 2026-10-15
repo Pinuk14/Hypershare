@@ -22,8 +22,11 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.Icon
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
+import androidx.compose.ui.res.painterResource
+import com.hypershare.R
 import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.material3.pulltorefresh.rememberPullToRefreshState
 import androidx.compose.runtime.Composable
@@ -55,6 +58,7 @@ import com.hypershare.ui.theme.SignalBlue
 import androidx.activity.compose.BackHandler
 import com.hypershare.ui.theme.TextPrimary
 import com.hypershare.ui.theme.TextSecondary
+import com.hypershare.ui.theme.WarningAmber
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -194,11 +198,11 @@ fun PeerListScreen(
                                 },
                             contentAlignment = Alignment.Center
                         ) {
-                            Text(
-                                text = if (uiState.isRefreshing) "⏳" else "↻",
-                                color = SignalBlue,
-                                fontWeight = FontWeight.Bold,
-                                fontSize = 18.sp
+                            Icon(
+                                painter = painterResource(if (uiState.isRefreshing) R.drawable.ic_hourglass else R.drawable.ic_refresh),
+                                contentDescription = "Refresh",
+                                tint = SignalBlue,
+                                modifier = Modifier.size(18.dp)
                             )
                         }
                     }
@@ -233,6 +237,51 @@ fun PeerListScreen(
                         fontSize = 11.sp,
                         modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp)
                     )
+
+                    GlassCard(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 16.dp, vertical = 4.dp),
+                        cornerRadius = 14.dp,
+                        borderColor = Color(0x44F59E0B)
+                    ) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .background(Color(0x18F59E0B))
+                                .padding(10.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Box(
+                                modifier = Modifier
+                                    .size(28.dp)
+                                    .background(Color(0x33F59E0B), CircleShape),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Icon(
+                                    painter = painterResource(R.drawable.ic_warning),
+                                    contentDescription = null,
+                                    tint = WarningAmber,
+                                    modifier = Modifier.size(14.dp)
+                                )
+                            }
+                            Spacer(modifier = Modifier.width(10.dp))
+                            Column {
+                                Text(
+                                    text = "EMERGENCY MESH CONVERSATIONS",
+                                    color = WarningAmber,
+                                    fontSize = 11.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    fontFamily = FontFamily.Monospace
+                                )
+                                Text(
+                                    text = "All chats preserved. Peers detected nearby on Wi-Fi Direct show a green outline.",
+                                    color = TextSecondary,
+                                    fontSize = 10.sp
+                                )
+                            }
+                        }
+                    }
                 }
 
                 Spacer(modifier = Modifier.height(6.dp))
@@ -309,10 +358,9 @@ fun PeerGlassListItem(
     isEmergencyMode: Boolean,
     onClick: () -> Unit
 ) {
-    // Green outline indicates the peer is currently online in the same local network.
-    // Discard online/offline status in Emergency mode only, keep in local mode.
+    // Green outline indicates the peer is currently reachable (online on LAN or detected nearby via Wi-Fi Direct).
     val showGreenOutline = if (isEmergencyMode) {
-        false
+        item.isNearbyWifiDirect
     } else {
         item.isOnlineOnLan
     }
@@ -324,11 +372,11 @@ fun PeerGlassListItem(
         formatTimestamp(item.lastActivity)
     }
 
-    val previewText = remember(item.lastMessageSnippet, item.isOnlineOnLan, isEmergencyMode) {
+    val previewText = remember(item.lastMessageSnippet, item.isOnlineOnLan, item.isNearbyWifiDirect, isEmergencyMode) {
         if (!item.lastMessageSnippet.isNullOrBlank()) {
             item.lastMessageSnippet
         } else if (isEmergencyMode) {
-            "Ready for Emergency Mesh Routing"
+            if (item.isNearbyWifiDirect) "Nearby on Wi-Fi Direct • Ready to Link" else "Ready for Emergency Mesh Routing"
         } else if (item.isOnlineOnLan) {
             "Online on local network • ${item.ipAddress ?: ""}"
         } else {
@@ -383,11 +431,11 @@ fun PeerGlassListItem(
                     )
                     if (item.isTrusted) {
                         Spacer(modifier = Modifier.width(6.dp))
-                        Text(
-                            text = "✓",
-                            color = ConnectedGreen,
-                            fontSize = 12.sp,
-                            fontWeight = FontWeight.Black
+                        Icon(
+                            painter = painterResource(R.drawable.ic_check),
+                            contentDescription = "Verified Contact",
+                            tint = ConnectedGreen,
+                            modifier = Modifier.size(13.dp)
                         )
                     }
                 }

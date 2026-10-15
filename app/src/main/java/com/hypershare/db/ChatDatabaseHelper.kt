@@ -45,11 +45,27 @@ class ChatDatabaseHelper(context: Context) :
                 db.execSQL(CREATE_TABLE_GROUP_RECEIPTS)
             } catch (_: Exception) { }
         }
+        if (oldVersion < 7) {
+            try {
+                db.execSQL("ALTER TABLE peers ADD COLUMN p2p_mac TEXT")
+            } catch (_: Exception) { }
+        }
+        if (oldVersion < 8) {
+            try {
+                db.execSQL("ALTER TABLE messages ADD COLUMN is_emergency INTEGER DEFAULT 0")
+            } catch (_: Exception) { }
+        }
+        if (oldVersion < 9) {
+            try {
+                db.execSQL("ALTER TABLE messages ADD COLUMN avg_speed INTEGER DEFAULT 0")
+                db.execSQL("ALTER TABLE messages ADD COLUMN duration_ms INTEGER DEFAULT 0")
+            } catch (_: Exception) { }
+        }
     }
 
     companion object {
         const val DATABASE_NAME = "hypershare_chat.db"
-        const val DATABASE_VERSION = 6
+        const val DATABASE_VERSION = 9
 
         private const val CREATE_TABLE_MESSAGES = """
             CREATE TABLE messages (
@@ -58,7 +74,10 @@ class ChatDatabaseHelper(context: Context) :
                 text TEXT NOT NULL,
                 timestamp INTEGER NOT NULL,
                 is_outgoing INTEGER NOT NULL,
-                delivery_status TEXT NOT NULL
+                delivery_status TEXT NOT NULL,
+                is_emergency INTEGER DEFAULT 0,
+                avg_speed INTEGER DEFAULT 0,
+                duration_ms INTEGER DEFAULT 0
             );
         """
 
@@ -69,7 +88,8 @@ class ChatDatabaseHelper(context: Context) :
                 last_seen INTEGER NOT NULL,
                 is_trusted INTEGER DEFAULT 0,
                 has_peer_accepted INTEGER DEFAULT 0,
-                public_key TEXT
+                public_key TEXT,
+                p2p_mac TEXT
             );
         """
 

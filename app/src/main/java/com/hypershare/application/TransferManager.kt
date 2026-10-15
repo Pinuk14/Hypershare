@@ -188,6 +188,9 @@ class TransferManager private constructor() {
         )
         addOrUpdateJob(job)
 
+        val isEmergency = com.hypershare.service.LanSocketManager.getInstance().isEmergencyActive ||
+                          targetIp.startsWith("192.168.49.") ||
+                          targetIp.contains("192.168.49")
         try {
             val msgRepo = com.hypershare.db.MessageRepository(resolvedContext)
             msgRepo.insertMediaMessage(
@@ -198,7 +201,8 @@ class TransferManager private constructor() {
                 fileSize = fileSize,
                 mimeType = mimeType,
                 localUri = fileUri.toString(),
-                transferId = transferId
+                transferId = transferId,
+                isEmergency = isEmergency
             )
         } catch (e: Exception) {
             Log.e(TAG, "Error inserting outgoing media message: ${e.message}", e)
@@ -387,6 +391,7 @@ class TransferManager private constructor() {
             try {
                 val msgRepo = com.hypershare.db.MessageRepository(context)
                 msgRepo.updateMessageStatus(transferId, com.hypershare.ui.chat.MessageStatus.DELIVERED)
+                msgRepo.updateMediaTransferMetrics(transferId, avgSpeed, totalDurationMs)
             } catch (_: Exception) {}
 
         } catch (e: Exception) {
@@ -436,6 +441,9 @@ class TransferManager private constructor() {
                     addOrUpdateJob(job)
                     _incomingPrompts.tryEmit(prompt)
 
+                    val senderIp = com.hypershare.service.LanSocketManager.getInstance().getPeerIp(prompt.senderPeerId)
+                    val isEmergency = com.hypershare.service.LanSocketManager.getInstance().isEmergencyActive ||
+                                      senderIp.startsWith("192.168.49.")
                     appContext?.let { ctx ->
                         try {
                             val msgRepo = com.hypershare.db.MessageRepository(ctx)
@@ -447,7 +455,8 @@ class TransferManager private constructor() {
                                 fileSize = prompt.fileSize,
                                 mimeType = prompt.mimeType,
                                 localUri = null,
-                                transferId = prompt.transferId
+                                transferId = prompt.transferId,
+                                isEmergency = isEmergency
                             )
                         } catch (e: Exception) {
                             Log.e(TAG, "Error inserting incoming media message: ${e.message}", e)
@@ -663,15 +672,16 @@ class TransferManager private constructor() {
                     isViewOnly = session.prompt.isViewOnly
                 )
 
+                val durationMs = (System.currentTimeMillis() - session.startTimeMs).coerceAtLeast(1)
+                val avgSpeed = (session.prompt.fileSize * 1000L) / durationMs
+
                 try {
                     val msgRepo = com.hypershare.db.MessageRepository(context)
                     msgRepo.updateMediaMessageUri(transferId, localUri.toString())
+                    msgRepo.updateMediaTransferMetrics(transferId, avgSpeed, durationMs)
                 } catch (e: Exception) {
                     Log.e(TAG, "Error updating media message localUri: ${e.message}", e)
                 }
-
-                val durationMs = (System.currentTimeMillis() - session.startTimeMs).coerceAtLeast(1)
-                val avgSpeed = (session.prompt.fileSize * 1000L) / durationMs
 
                 updateJob(transferId) {
                     it.copy(

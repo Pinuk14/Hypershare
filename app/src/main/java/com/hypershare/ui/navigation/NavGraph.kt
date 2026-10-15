@@ -59,7 +59,7 @@ import kotlinx.serialization.Serializable
 
 @Serializable data object HomeNavKey : NavKey
 @Serializable data class PeerListNavKey(val mode: PeerMode = PeerMode.MODE_1_WIFI) : NavKey
-@Serializable data class ChatNavKey(val peerId: String, val peerName: String = "", val peerIp: String = "", val peerPort: Int = 47200) : NavKey
+@Serializable data class ChatNavKey(val peerId: String, val peerName: String = "", val peerIp: String = "", val peerPort: Int = 47200, val isEmergency: Boolean = false) : NavKey
 @Serializable data object AccountSettingsNavKey : NavKey
 @Serializable data object AppSettingsNavKey : NavKey
 @Serializable data object FileBrowserNavKey : NavKey
@@ -293,7 +293,8 @@ fun HyperShareNavGraph(
                         val ip = activePeer?.ipAddress?.hostAddress ?: convItem?.ipAddress ?: ""
                         val name = activePeer?.displayName ?: convItem?.displayName ?: ""
                         val port = activePeer?.port ?: convItem?.port ?: 47200
-                        pushDestination(ChatNavKey(peerId = peerId, peerName = name, peerIp = ip, peerPort = port))
+                        val isEmerg = (key.mode == PeerMode.MODE_2_MESH) || (meshNetworkService?.activeMode == PeerMode.MODE_2_MESH)
+                        pushDestination(ChatNavKey(peerId = peerId, peerName = name, peerIp = ip, peerPort = port, isEmergency = isEmerg))
                     },
                     onWifiDirectPeerClick = { peer ->
                         val peerId = vm.uiState.value.wifiDirectPeerIds[peer.deviceAddress] ?: peer.deviceAddress
@@ -304,7 +305,8 @@ fun HyperShareNavGraph(
                                 ChatNavKey(
                                     peerId = peerId,
                                     peerName = peer.deviceName.ifBlank { peer.deviceAddress },
-                                    peerIp = targetIp
+                                    peerIp = targetIp,
+                                    isEmergency = true
                                 )
                             )
                         } else {
@@ -338,7 +340,12 @@ fun HyperShareNavGraph(
                 }
 
                 // In Emergency Mode only (P2P), auto-initiate Wi-Fi Direct connection to the peer if needed
-                val isEmergencyMode = meshNetworkService?.activeMode == PeerMode.MODE_2_MESH
+                val currentMode = meshNetworkService?.activeModeFlow?.collectAsState()?.value
+                val isEmergencyMode = key.isEmergency || (currentMode == PeerMode.MODE_2_MESH) || (meshNetworkService?.activeMode == PeerMode.MODE_2_MESH) || (lanSocketManager.isEmergencyActive)
+                LaunchedEffect(isEmergencyMode) {
+                    vm.setEmergencyMode(isEmergencyMode)
+                }
+
                 LaunchedEffect(key.peerId, key.peerIp, meshNetworkService, isEmergencyMode) {
                     if (isEmergencyMode && key.peerIp.isEmpty()) {
                         meshNetworkService?.requestConnectToPeer(key.peerId)
@@ -346,6 +353,7 @@ fun HyperShareNavGraph(
                 }
 
                 val p2pState = meshNetworkService?.wifiDirectController?.connectionState?.collectAsState()?.value
+                val p2pDevices = meshNetworkService?.wifiDirectController?.discoveredPeers?.collectAsState()?.value ?: emptyList()
 
                 ChatScreen(
                     viewModel = vm,
@@ -353,7 +361,25 @@ fun HyperShareNavGraph(
                     onConnectWifiDirect = {
                         meshNetworkService?.requestConnectToPeer(key.peerId)
                     },
+                    onDisconnectWifiDirect = {
+                        meshNetworkService?.disconnectWifiDirect()
+                    },
+                    onConnectDevice = { deviceAddress ->
+                        meshNetworkService?.requestConnectToDevice(deviceAddress, key.peerId)
+                    },
+                    onResetWifiDirect = {
+                        lanSocketManager.closeActiveConnections()
+                        meshNetworkService?.wifiDirectController?.resetWifiDirect()
+                    },
+                    onRefreshWifiDirect = {
+                        meshNetworkService?.wifiDirectController?.start()
+                    },
+                    onToggleEmergencyMode = {
+                        val nextMode = if (isEmergencyMode) PeerMode.MODE_1_WIFI else PeerMode.MODE_2_MESH
+                        activateNetworkMode(nextMode)
+                    },
                     wifiDirectConnection = p2pState,
+                    discoveredWifiDirectDevices = p2pDevices,
                     isEmergencyMode = isEmergencyMode
                 )
             }

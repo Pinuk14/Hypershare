@@ -72,7 +72,7 @@ class MessageRepository(context: Context) {
 
         val cursor = db.query(
             "messages",
-            arrayOf("id", "peer_id", "text", "timestamp", "is_outgoing", "delivery_status"),
+            arrayOf("id", "peer_id", "text", "timestamp", "is_outgoing", "delivery_status", "is_emergency"),
             "peer_id = ?",
             arrayOf(peerId),
             null,
@@ -87,6 +87,7 @@ class MessageRepository(context: Context) {
             val isOutgoingIndex = it.getColumnIndexOrThrow("is_outgoing")
             val timestampIndex = it.getColumnIndexOrThrow("timestamp")
             val statusIndex = it.getColumnIndexOrThrow("delivery_status")
+            val isEmergencyIndex = it.getColumnIndex("is_emergency")
 
             while (it.moveToNext()) {
                 val id = it.getString(idIndex)
@@ -96,6 +97,11 @@ class MessageRepository(context: Context) {
                 val timestamp = it.getLong(timestampIndex)
                 val statusStr = it.getString(statusIndex)
                 val status = try { MessageStatus.valueOf(statusStr) } catch (_: Exception) { MessageStatus.SENT }
+                val isEmergency = if (isEmergencyIndex >= 0) it.getInt(isEmergencyIndex) == 1 else false
+                val avgSpeedIndex = it.getColumnIndex("avg_speed")
+                val durationMsIndex = it.getColumnIndex("duration_ms")
+                val avgSpeed = if (avgSpeedIndex >= 0) it.getLong(avgSpeedIndex) else 0L
+                val durationMs = if (durationMsIndex >= 0) it.getLong(durationMsIndex) else 0L
 
                 val mediaMeta = parseMediaText(text)
                 if (mediaMeta != null) {
@@ -111,7 +117,10 @@ class MessageRepository(context: Context) {
                             mediaType = mediaMeta.mediaType,
                             mediaName = mediaMeta.fileName,
                             mediaSize = mediaMeta.fileSize,
-                            transferId = mediaMeta.transferId
+                            transferId = mediaMeta.transferId,
+                            isEmergency = isEmergency,
+                            avgSpeedBps = avgSpeed,
+                            transferDurationMs = durationMs
                         )
                     )
                 } else {
@@ -122,7 +131,10 @@ class MessageRepository(context: Context) {
                             text = text,
                             isOutgoing = isOutgoing,
                             timestamp = timestamp,
-                            status = status
+                            status = status,
+                            isEmergency = isEmergency,
+                            avgSpeedBps = avgSpeed,
+                            transferDurationMs = durationMs
                         )
                     )
                 }
@@ -140,6 +152,9 @@ class MessageRepository(context: Context) {
             put("timestamp", message.timestamp)
             put("is_outgoing", if (message.isOutgoing) 1 else 0)
             put("delivery_status", message.status.name)
+            put("is_emergency", if (message.isEmergency) 1 else 0)
+            put("avg_speed", message.avgSpeedBps)
+            put("duration_ms", message.transferDurationMs)
         }
 
         db.insertWithOnConflict("messages", null, values, android.database.sqlite.SQLiteDatabase.CONFLICT_REPLACE)
@@ -263,7 +278,10 @@ class MessageRepository(context: Context) {
         mimeType: String,
         localUri: String? = null,
         transferId: String = messageId,
-        timestamp: Long = System.currentTimeMillis()
+        timestamp: Long = System.currentTimeMillis(),
+        isEmergency: Boolean = false,
+        avgSpeedBps: Long = 0L,
+        durationMs: Long = 0L
     ) {
         val mediaText = formatMediaText(mimeType, fileName, fileSize, localUri, transferId)
         val ext = fileName.substringAfterLast('.', "").lowercase()
@@ -284,9 +302,25 @@ class MessageRepository(context: Context) {
             mediaType = mediaType,
             mediaName = fileName,
             mediaSize = fileSize,
-            transferId = transferId
+            transferId = transferId,
+            isEmergency = isEmergency,
+            avgSpeedBps = avgSpeedBps,
+            transferDurationMs = durationMs
         )
         insertMessage(peerId, message)
+    }
+
+    fun updateMediaTransferMetrics(transferId: String, avgSpeedBps: Long, durationMs: Long) {
+        try {
+            val db = dbHelper.writableDatabase
+            val values = ContentValues().apply {
+                put("avg_speed", avgSpeedBps)
+                put("duration_ms", durationMs)
+            }
+            db.update("messages", values, "id = ? OR text LIKE ?", arrayOf(transferId, "%|$transferId]"))
+        } catch (e: Exception) {
+            android.util.Log.e("MessageRepository", "Failed to update transfer metrics for $transferId", e)
+        }
     }
 
     fun updateMediaMessageUri(transferId: String, localUri: String) {
@@ -332,15 +366,17 @@ class MessageRepository(context: Context) {
         return getMessagesForPeer(peerId).filter { it.mediaType != null }
     }
 
-    fun savePeer(peerId: String, displayName: String, isTrusted: Boolean = false, hasPeerAccepted: Boolean = false, publicKey: String? = null) {
+    fun savePeer(peerId: String, displayName: String, isTrusted: Boolean = false, hasPeerAccepted: Boolean = false, publicKey: String? = null, p2pMac: String? = null) {
         if (peerId.isEmpty() || displayName.isEmpty()) return
         val db = dbHelper.writableDatabase
 
         // Check existing trust state so discovery doesn't overwrite established pairing
         val currentlyTrusted = isPeerTrusted(peerId)
         val currentlyAccepted = hasPeerAcceptedUs(peerId)
+        val existingMac = getPeerP2pMac(peerId)
         val finalTrust = if (currentlyTrusted) 1 else (if (isTrusted) 1 else 0)
         val finalAccepted = if (currentlyAccepted) 1 else (if (hasPeerAccepted) 1 else 0)
+        val finalMac = if (!p2pMac.isNullOrEmpty()) p2pMac else existingMac
 
         val values = ContentValues().apply {
             put("peer_id", peerId)
@@ -351,8 +387,62 @@ class MessageRepository(context: Context) {
             if (!publicKey.isNullOrEmpty()) {
                 put("public_key", publicKey)
             }
+            if (!finalMac.isNullOrEmpty()) {
+                put("p2p_mac", finalMac)
+            }
         }
         db.insertWithOnConflict("peers", null, values, android.database.sqlite.SQLiteDatabase.CONFLICT_REPLACE)
+    }
+
+    fun savePeerP2pMac(peerId: String, p2pMac: String) {
+        if (peerId.isEmpty() || p2pMac.isEmpty()) return
+        val db = dbHelper.writableDatabase
+        val values = ContentValues().apply {
+            put("p2p_mac", p2pMac)
+        }
+        db.update("peers", values, "peer_id = ?", arrayOf(peerId))
+    }
+
+    fun getPeerP2pMac(peerId: String): String? {
+        if (peerId.isEmpty()) return null
+        val db = dbHelper.readableDatabase
+        val cursor = db.query(
+            "peers",
+            arrayOf("p2p_mac"),
+            "peer_id = ?",
+            arrayOf(peerId),
+            null,
+            null,
+            null
+        )
+        cursor.use {
+            if (it.moveToFirst()) {
+                val index = it.getColumnIndex("p2p_mac")
+                if (index != -1 && !it.isNull(index)) return it.getString(index)
+            }
+        }
+        return null
+    }
+
+    fun getPeerIdByP2pMac(p2pMac: String): String? {
+        if (p2pMac.isEmpty()) return null
+        val db = dbHelper.readableDatabase
+        val cursor = db.query(
+            "peers",
+            arrayOf("peer_id"),
+            "p2p_mac = ?",
+            arrayOf(p2pMac),
+            null,
+            null,
+            null
+        )
+        cursor.use {
+            if (it.moveToFirst()) {
+                val index = it.getColumnIndex("peer_id")
+                if (index != -1 && !it.isNull(index)) return it.getString(index)
+            }
+        }
+        return null
     }
 
     fun markPeerAsTrusted(peerId: String, publicKey: String? = null) {
@@ -535,6 +625,7 @@ class MessageRepository(context: Context) {
                 p.last_seen, 
                 p.is_trusted, 
                 p.has_peer_accepted,
+                p.p2p_mac,
                 MAX(COALESCE(m.timestamp, p.last_seen)) AS last_activity,
                 (SELECT m2.text FROM messages m2 WHERE m2.peer_id = p.peer_id ORDER BY m2.timestamp DESC LIMIT 1) AS last_message,
                 COUNT(CASE WHEN m.is_outgoing = 0 AND m.delivery_status != 'READ' THEN 1 END) AS unread_count
@@ -552,6 +643,7 @@ class MessageRepository(context: Context) {
             val lastSeenIdx = it.getColumnIndexOrThrow("last_seen")
             val trustedIdx = it.getColumnIndexOrThrow("is_trusted")
             val acceptedIdx = it.getColumnIndexOrThrow("has_peer_accepted")
+            val p2pMacIdx = it.getColumnIndex("p2p_mac")
             val lastActIdx = it.getColumnIndexOrThrow("last_activity")
             val lastMsgIdx = it.getColumnIndexOrThrow("last_message")
             val unreadIdx = it.getColumnIndexOrThrow("unread_count")
@@ -563,6 +655,7 @@ class MessageRepository(context: Context) {
                 val lastSeen = it.getLong(lastSeenIdx)
                 val isTrusted = it.getInt(trustedIdx) == 1
                 val hasPeerAccepted = it.getInt(acceptedIdx) == 1
+                val p2pMac = if (p2pMacIdx != -1 && !it.isNull(p2pMacIdx)) it.getString(p2pMacIdx) else null
                 val lastActivity = it.getLong(lastActIdx)
                 val lastMessage = if (!it.isNull(lastMsgIdx)) it.getString(lastMsgIdx) else null
                 val unreadCount = it.getInt(unreadIdx)
@@ -576,7 +669,8 @@ class MessageRepository(context: Context) {
                         hasPeerAccepted = hasPeerAccepted,
                         lastActivity = if (lastActivity > 0) lastActivity else lastSeen,
                         lastMessageSnippet = formatSnippet(lastMessage),
-                        unreadCount = unreadCount
+                        unreadCount = unreadCount,
+                        p2pMac = p2pMac
                     )
                 )
             }
@@ -593,5 +687,6 @@ data class PeerConversation(
     val hasPeerAccepted: Boolean,
     val lastActivity: Long,
     val lastMessageSnippet: String?,
-    val unreadCount: Int
+    val unreadCount: Int,
+    val p2pMac: String? = null
 )

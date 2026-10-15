@@ -34,8 +34,8 @@ fun AmbientMeshGraphCanvas(
         label = "phase"
     )
 
-    val lineColor = if (isDisasterMode) MeshTeal.copy(alpha = 0.12f) else SignalBlue.copy(alpha = 0.10f)
-    val dotColor = if (isDisasterMode) MeshTeal.copy(alpha = 0.25f) else SignalBlue.copy(alpha = 0.20f)
+    val lineColor = if (isDisasterMode) Color(0x30FF6D00) else SignalBlue.copy(alpha = 0.10f)
+    val dotColor = if (isDisasterMode) Color(0x60FF9100) else SignalBlue.copy(alpha = 0.20f)
 
     Canvas(modifier = modifier.fillMaxSize()) {
         val w = size.width

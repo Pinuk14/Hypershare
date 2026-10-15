@@ -169,9 +169,13 @@
 - [x] Implement client-to-GO TCP connection: non-GO client retrieves GO IP from `WifiP2pInfo` and invokes `LanSocketManager.connectToPeer()`
 - [x] Implement bidirectional TCP HELLO handshake over Wi-Fi Direct channel with loop prevention (`helloResponsesSent`)
 - [x] Map Wi-Fi Direct device address to cryptographic peer ID via `LanSocketManager.peerHandshakeEventsFlow`
-- [x] Compose UI integration: `PeerListNavKey(mode)`, live Wi-Fi Direct status banners (`SCANNING`, `CONNECTING`, `CONNECTED`, `GROUP OWNER`), P2P peer list items, and Chat navigation
+- [x] Persistent P2P Identity: SQLite `p2p_mac` column in `peers` table and QR `ContactCard` MAC exchange to eliminate fragile deviceName heuristics
+- [x] Zero-Settings Auto-Connect & Resilient Recovery: Automatic discovery polling, channel reinit on disconnect, `resetWifiDirect()` (`cancelConnect` + `removeGroup`) clean-slate recovery, and automatic recovery on `BUSY (2)` framework errors
+- [x] Extended 12-attempt TCP socket handshake in `LanSocketManager.connectToPeer` bridging Android DHCP IP assignment delay on `192.168.49.1`
+- [x] Wi-Fi Direct Connection Hub modal (`P2pConnectionHubDialog`): Live connection status (Host/Client, IP, Target Peer), quick action buttons (⚡ Auto-Connect, ↻ Rescan, ↺ Reset Framework), and 1-tap direct connection list for discovered radios
+- [x] Compose UI integration: `PeerListNavKey(mode)`, live Wi-Fi Direct status banners (`SCANNING`, `CONNECTING`, `CONNECTED`, `GROUP OWNER`), P2P peer list items with green presence indicator, and Chat navigation
 
-**Deliverable:** Two physical devices can discover each other via Wi-Fi Direct in Emergency Mode, form a P2P group, establish a TCP socket, and complete an encrypted HELLO handshake with navigation to chat.
+**Deliverable:** Two physical devices can discover each other via Wi-Fi Direct in Emergency Mode, auto-connect without system settings intervention using verified MAC associations, recover gracefully from Android P2P framework lockups, and manage connections via an intuitive in-chat P2P Connection Hub.
 
 ---
 

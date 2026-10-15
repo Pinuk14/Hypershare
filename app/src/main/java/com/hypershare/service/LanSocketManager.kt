@@ -97,6 +97,7 @@ class LanSocketManager private constructor() {
 
     @Volatile var activeChatPeerId: String? = null
     @Volatile var activeGroupChatId: String? = null
+    @Volatile var isEmergencyActive: Boolean = false
 
     companion object {
         const val DEFAULT_PORT = 47200
@@ -337,13 +338,15 @@ class LanSocketManager private constructor() {
                             val initialStatus = if (isChatActive) MessageStatus.READ else MessageStatus.DELIVERED
 
                             Log.d(TAG, "MSG received from $sourcePeerId [msgId=$msgId, isActive=$isChatActive]: $text")
+                            val isEmergencyMsg = isEmergencyActive || senderIp.startsWith("192.168.49.")
                             val messageItem = ChatMessageItem(
                                 id = msgId,
                                 senderId = sourcePeerId,
                                 text = text,
                                 isOutgoing = false,
                                 timestamp = System.currentTimeMillis(),
-                                status = initialStatus
+                                status = initialStatus,
+                                isEmergency = isEmergencyMsg
                             )
 
                             // Persist incoming message to SQLite database immediately regardless of UI state
@@ -447,12 +450,16 @@ class LanSocketManager private constructor() {
     fun connectToPeer(targetIp: String, port: Int = DEFAULT_PORT, senderPeerId: String) {
         if (targetIp.isEmpty()) return
         scope.launch {
-            val existingSocket = activeSockets[targetIp]
-            if (existingSocket != null && !existingSocket.isClosed) return@launch
+            if (targetIp.startsWith("192.168.49.")) {
+                closeSocketForIp(targetIp)
+            } else {
+                val existingSocket = activeSockets[targetIp]
+                if (existingSocket != null && !existingSocket.isClosed) return@launch
+            }
 
             var socket: Socket? = null
             var attempts = 0
-            val maxAttempts = 6
+            val maxAttempts = 12
             while (socket == null && attempts < maxAttempts && isRunning) {
                 try {
                     attempts++
@@ -461,9 +468,9 @@ class LanSocketManager private constructor() {
                     s.connect(java.net.InetSocketAddress(targetIp, port), 2000)
                     socket = s
                 } catch (e: Exception) {
-                    Log.w(TAG, "Attempt $attempts/$maxAttempts: Handshake connect to $targetIp:$port failed (${e.message}), retrying in 400ms...")
+                    Log.w(TAG, "Attempt $attempts/$maxAttempts: Handshake connect to $targetIp:$port failed (${e.message}), retrying in 500ms...")
                     if (attempts < maxAttempts) {
-                        kotlinx.coroutines.delay(400)
+                        kotlinx.coroutines.delay(500)
                     }
                 }
             }
@@ -480,6 +487,7 @@ class LanSocketManager private constructor() {
                 activeOutputStreams.remove(targetIp)
                 sendHello(socket, targetIp, senderPeerId)
                 helloResponsesSent.add(socket)
+                flushPendingMessagesForPeer(senderPeerId)
                 handleIncomingSocket(socket)
             } catch (e: Exception) {
                 Log.e(TAG, "Failed to complete initial TCP handshake to $targetIp:$port", e)
@@ -820,6 +828,18 @@ class LanSocketManager private constructor() {
         isRunning = false
         try { serverSocket?.close() } catch (e: Exception) { }
         closeActiveConnections()
+    }
+
+    fun closeSocketForIp(ip: String) {
+        val socket = activeSockets.remove(ip)
+        activeOutputStreams.remove(ip)
+        try { socket?.close() } catch (_: Exception) {}
+        val deadPeerKeys = activeSockets.entries.filter { it.value === socket }.map { it.key }
+        deadPeerKeys.forEach { key ->
+            activeSockets.remove(key)
+            activeOutputStreams.remove(key)
+        }
+        if (socket != null) helloResponsesSent.remove(socket)
     }
 
     fun closeActiveConnections() {

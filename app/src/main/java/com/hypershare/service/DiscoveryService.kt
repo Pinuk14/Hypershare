@@ -82,10 +82,14 @@ class DiscoveryService : Service() {
         startForegroundNotification()
     }
 
+    private var activeMode: PeerMode? = null
+
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         val mode = intent?.getStringExtra(MeshNetworkService.EXTRA_MODE)
             ?.let { runCatching { PeerMode.valueOf(it) }.getOrNull() }
+            ?: activeMode
             ?: PeerMode.MODE_1_WIFI
+        activeMode = mode
         if (mode == PeerMode.MODE_1_WIFI) {
             startDiscovery(mode)
         } else {

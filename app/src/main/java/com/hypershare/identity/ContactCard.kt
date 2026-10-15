@@ -7,7 +7,9 @@ data class ContactCard(
     val displayName: String,
     val publicKey: ByteArray,
     val timestamp: Long = System.currentTimeMillis(),
-    val signature: ByteArray
+    val signature: ByteArray,
+    val p2pMac: String? = null,
+    val p2pDeviceName: String? = null
 ) {
     fun getSigningPayload(): ByteArray {
         val userIdBytes = userId.toByteArray(Charsets.UTF_8)
@@ -34,7 +36,9 @@ data class ContactCard(
         val pubB64 = encodeBase64(publicKey)
         val sigB64 = encodeBase64(signature)
         val escapedName = displayName.replace("\"", "\\\"")
-        return """{"userId":"$userId","displayName":"$escapedName","publicKey":"$pubB64","timestamp":$timestamp,"signature":"$sigB64"}"""
+        val macPart = if (!p2pMac.isNullOrEmpty()) ""","p2pMac":"$p2pMac"""" else ""
+        val devPart = if (!p2pDeviceName.isNullOrEmpty()) ""","p2pDeviceName":"${p2pDeviceName.replace("\"", "\\\"")}"""" else ""
+        return """{"userId":"$userId","displayName":"$escapedName","publicKey":"$pubB64","timestamp":$timestamp,"signature":"$sigB64"$macPart$devPart}"""
     }
 
     override fun equals(other: Any?): Boolean {
@@ -62,7 +66,12 @@ data class ContactCard(
     }
 
     companion object {
-        fun createSignedCard(identityManager: IdentityManager, displayName: String): ContactCard {
+        fun createSignedCard(
+            identityManager: IdentityManager,
+            displayName: String,
+            p2pMac: String? = null,
+            p2pDeviceName: String? = null
+        ): ContactCard {
             val userId = identityManager.getUserId()
             val publicKey = identityManager.getPublicKey()
             val timestamp = System.currentTimeMillis()
@@ -72,7 +81,9 @@ data class ContactCard(
                 displayName = displayName,
                 publicKey = publicKey,
                 timestamp = timestamp,
-                signature = ByteArray(0)
+                signature = ByteArray(0),
+                p2pMac = p2pMac,
+                p2pDeviceName = p2pDeviceName
             )
             
             val signature = identityManager.signData(tempCard.getSigningPayload())
@@ -86,13 +97,17 @@ data class ContactCard(
                 val pubB64 = extractJsonField(jsonStr, "publicKey") ?: return null
                 val timestampStr = extractJsonRawField(jsonStr, "timestamp") ?: return null
                 val sigB64 = extractJsonField(jsonStr, "signature") ?: return null
+                val p2pMac = extractJsonField(jsonStr, "p2pMac")
+                val p2pDeviceName = extractJsonField(jsonStr, "p2pDeviceName")
 
                 ContactCard(
                     userId = userId,
                     displayName = displayName,
                     publicKey = decodeBase64(pubB64),
                     timestamp = timestampStr.toLong(),
-                    signature = decodeBase64(sigB64)
+                    signature = decodeBase64(sigB64),
+                    p2pMac = p2pMac,
+                    p2pDeviceName = p2pDeviceName
                 )
             } catch (e: Exception) {
                 null

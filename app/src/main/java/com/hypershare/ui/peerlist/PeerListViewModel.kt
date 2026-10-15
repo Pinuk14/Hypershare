@@ -194,12 +194,8 @@ class PeerListViewModel(
         val itemsMap = LinkedHashMap<String, PeerUiItem>()
 
         // 1. Populate from ever-connected DB conversations
-        // In Emergency mode, ONLY show contacts who have been mutually accepted (trusted & accepted)
-        val sourceConvs = if (isEmergency) {
-            dbConversations.filter { it.isTrusted && it.hasPeerAccepted }
-        } else {
-            dbConversations
-        }
+        // All conversations remain accessible in both Local and Emergency modes
+        val sourceConvs = dbConversations
 
         for (conv in sourceConvs) {
             val cleanConvName = normalizeName(conv.displayName)
@@ -207,6 +203,7 @@ class PeerListViewModel(
                 normalizeName(it.displayName) == cleanConvName 
             })
             val wifiDevice = wifiDirectMap[conv.peerId]
+                ?: (if (!conv.p2pMac.isNullOrEmpty()) _uiState.value.wifiDirectPeers.firstOrNull { it.deviceAddress.equals(conv.p2pMac, ignoreCase = true) } else null)
             val p2pStatus = when {
                 _uiState.value.wifiDirectConnection.isConnected -> PeerStatus.CONNECTED
                 _uiState.value.wifiDirectConnection.isConnecting -> PeerStatus.CONNECTING
@@ -224,9 +221,9 @@ class PeerListViewModel(
                 isOnlineOnLan = if (isEmergency) false else (lanPeer != null),
                 ipAddress = if (isEmergency) null else lanPeer?.ipAddress?.hostAddress,
                 port = lanPeer?.port ?: 47200,
-                isNearbyWifiDirect = if (isEmergency) false else (wifiDevice != null),
+                isNearbyWifiDirect = (wifiDevice != null),
                 wifiDirectDevice = wifiDevice,
-                wifiDirectDeviceAddress = wifiDevice?.deviceAddress,
+                wifiDirectDeviceAddress = wifiDevice?.deviceAddress ?: conv.p2pMac,
                 p2pStatus = p2pStatus
             )
         }
@@ -310,7 +307,7 @@ class PeerListViewModel(
                     isTrusted = item.isTrusted || existing.isTrusted,
                     hasPeerAccepted = item.hasPeerAccepted || existing.hasPeerAccepted,
                     isOnlineOnLan = if (isEmergency) false else (item.isOnlineOnLan || existing.isOnlineOnLan),
-                    isNearbyWifiDirect = if (isEmergency) false else (item.isNearbyWifiDirect || existing.isNearbyWifiDirect),
+                    isNearbyWifiDirect = (item.isNearbyWifiDirect || existing.isNearbyWifiDirect),
                     ipAddress = if (!isEmergency && (item.isOnlineOnLan || existing.isOnlineOnLan)) {
                         (if (preferred.isOnlineOnLan) preferred.ipAddress else null)
                             ?: (if (item.isOnlineOnLan) item.ipAddress else null)
