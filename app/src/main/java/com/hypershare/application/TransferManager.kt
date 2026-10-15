@@ -99,17 +99,22 @@ class TransferManager private constructor() {
         val tempFile: File,
         val raf: RandomAccessFile,
         val receivedChunks: BooleanArray,
+        val localPeerId: String,
+        val senderIp: String,
         val startTimeMs: Long = System.currentTimeMillis()
     ) {
         val bytesReceived = AtomicLong(0L)
         val recentBytes = AtomicLong(0L)
+        val chunksReceived = java.util.concurrent.atomic.AtomicInteger(0)
         @Volatile var peakSpeedBps: Long = 0L
         @Volatile var currentSpeedBps: Long = 0L
     }
 
+    private val lastUiProgressUpdate = ConcurrentHashMap<String, Long>()
+
     companion object {
         private const val TAG = "TransferManager"
-        const val SLIDING_WINDOW_SIZE = 8
+        const val SLIDING_WINDOW_SIZE = 48
         const val CHUNK_TIMEOUT_MS = 3000L
         const val MAX_CHUNK_RETRIES = 3
 
@@ -190,14 +195,23 @@ class TransferManager private constructor() {
     private suspend fun executeOutboundTransfer(job: TransferJob, targetIp: String) {
         val context = appContext ?: return
         val transferId = job.id
+        val fileUri = job.fileUri ?: throw IllegalStateException("File URI missing for transfer $transferId")
 
         try {
-            updateJobState(transferId, TransferState.IN_PROGRESS)
+            // Keep state as QUEUED while negotiating transfer with peer
 
-            // Step 1: Pre-calculate overall CRC32 via stream
-            val (computedSize, fullCrc32) = context.contentResolver.openInputStream(job.fileUri!!)?.use { stream ->
-                ChunkManager.computeStreamMetadata(stream)
-            } ?: throw IllegalStateException("Unable to open input stream for ${job.fileUri}")
+            // Step 1: Pre-calculate overall CRC32 (only dry-run read small files <= 2MB to start instant transmission)
+            val (computedSize, fullCrc32) = if (job.fileSize in 1L..(2 * 1024 * 1024L)) {
+                context.contentResolver.openInputStream(fileUri)?.use { stream ->
+                    ChunkManager.computeStreamMetadata(stream)
+                } ?: Pair(job.fileSize, 0L)
+            } else if (job.fileSize > 0L) {
+                Pair(job.fileSize, 0L)
+            } else {
+                context.contentResolver.openInputStream(fileUri)?.use { stream ->
+                    ChunkManager.computeStreamMetadata(stream)
+                } ?: throw IllegalStateException("Unable to open input stream for $fileUri")
+            }
 
             val actualTotalChunks = ((computedSize + ChunkManager.CHUNK_SIZE - 1) / ChunkManager.CHUNK_SIZE).toInt().coerceAtLeast(1)
             updateJob(transferId) {
@@ -243,6 +257,7 @@ class TransferManager private constructor() {
             }
 
             Log.d(TAG, "Peer accepted transfer $transferId. Beginning sliding window chunk transmission...")
+            updateJobState(transferId, TransferState.IN_PROGRESS)
 
             // Step 3: Sliding Window Transmission
             val ackMap = ConcurrentHashMap<Int, CompletableDeferred<Unit>>()
@@ -250,52 +265,54 @@ class TransferManager private constructor() {
             val windowSemaphore = Semaphore(SLIDING_WINDOW_SIZE)
             val startTimeMs = System.currentTimeMillis()
 
-            context.contentResolver.openInputStream(job.fileUri)?.use { inputStream ->
-                for (chunkIndex in 0 until actualTotalChunks) {
-                    windowSemaphore.acquire()
+            context.contentResolver.openInputStream(fileUri)?.use { rawInputStream ->
+                java.io.BufferedInputStream(rawInputStream, 256 * 1024).use { inputStream ->
+                    for (chunkIndex in 0 until actualTotalChunks) {
+                        windowSemaphore.acquire()
 
-                    val chunk = ChunkManager.readNextChunk(
-                        inputStream = inputStream,
-                        transferId = transferId,
-                        chunkIndex = chunkIndex,
-                        totalChunks = actualTotalChunks
-                    ) ?: break
+                        val chunk = ChunkManager.readNextChunk(
+                            inputStream = inputStream,
+                            transferId = transferId,
+                            chunkIndex = chunkIndex,
+                            totalChunks = actualTotalChunks
+                        ) ?: break
 
-                    val ackDeferred = CompletableDeferred<Unit>()
-                    ackMap[chunkIndex] = ackDeferred
+                        val ackDeferred = CompletableDeferred<Unit>()
+                        ackMap[chunkIndex] = ackDeferred
 
-                    // Launch transmission and timeout/retry for this chunk
-                    scope.launch {
-                        var attempt = 0
-                        var acknowledged = false
+                        // Launch transmission and timeout/retry for this chunk
+                        scope.launch(Dispatchers.IO) {
+                            var attempt = 0
+                            var acknowledged = false
 
-                        while (attempt < MAX_CHUNK_RETRIES && !acknowledged && isActive) {
-                            attempt++
-                            val chunkPacket = PacketBuilder.buildDataChunkPacket(
-                                sourcePeerId = job.sourcePeerId,
-                                destPeerId = job.destinationPeerId,
-                                seqNum = LanSocketManager.getInstance().nextSequenceNumber(),
-                                chunk = chunk
-                            )
-                            LanSocketManager.getInstance().sendPacket(chunkPacket, job.destinationPeerId, targetIp)
+                            while (attempt < MAX_CHUNK_RETRIES && !acknowledged && isActive) {
+                                attempt++
+                                val chunkPacket = PacketBuilder.buildDataChunkPacket(
+                                    sourcePeerId = job.sourcePeerId,
+                                    destPeerId = job.destinationPeerId,
+                                    seqNum = LanSocketManager.getInstance().nextSequenceNumber(),
+                                    chunk = chunk
+                                )
+                                LanSocketManager.getInstance().sendPacketDirect(chunkPacket, job.destinationPeerId, targetIp)
 
-                            val acked = withTimeoutOrNull(CHUNK_TIMEOUT_MS) { ackDeferred.await() }
-                            if (acked != null) {
-                                acknowledged = true
-                                windowSemaphore.release()
-                                ackMap.remove(chunkIndex)
+                                val acked = withTimeoutOrNull(CHUNK_TIMEOUT_MS) { ackDeferred.await() }
+                                if (acked != null) {
+                                    acknowledged = true
+                                    windowSemaphore.release()
+                                    ackMap.remove(chunkIndex)
 
-                                // Update byte counters
-                                updateJobProgress(transferId, chunk.payload.size.toLong())
-                            } else {
-                                Log.w(TAG, "Chunk $chunkIndex timeout (attempt $attempt/$MAX_CHUNK_RETRIES), retransmitting...")
+                                    // Update byte counters
+                                    updateJobProgress(transferId, chunk.payload.size.toLong())
+                                } else {
+                                    Log.w(TAG, "Chunk $chunkIndex timeout (attempt $attempt/$MAX_CHUNK_RETRIES), retransmitting...")
+                                }
                             }
-                        }
 
-                        if (!acknowledged) {
-                            Log.e(TAG, "Chunk $chunkIndex failed after $MAX_CHUNK_RETRIES retries")
-                            windowSemaphore.release()
-                            cancelTransfer(transferId, "Network timeout on chunk $chunkIndex")
+                            if (!acknowledged) {
+                                Log.e(TAG, "Chunk $chunkIndex failed after $MAX_CHUNK_RETRIES retries")
+                                windowSemaphore.release()
+                                cancelTransfer(transferId, "Network timeout on chunk $chunkIndex")
+                            }
                         }
                     }
                 }
@@ -392,8 +409,10 @@ class TransferManager private constructor() {
                         isOutgoing = false
                     )
                     addOrUpdateJob(job)
-
                     _incomingPrompts.tryEmit(prompt)
+
+                    Log.d(TAG, "Auto-accepting incoming transfer ${prompt.transferId} from ${prompt.senderPeerId}")
+                    acceptTransfer(prompt.transferId)
                 } catch (e: Exception) {
                     Log.e(TAG, "Error parsing TRANSFER_INIT: ${e.message}", e)
                 }
@@ -469,11 +488,16 @@ class TransferManager private constructor() {
                     mimeType = job.mimeType
                 )
 
+                val senderIp = LanSocketManager.getInstance().getPeerIp(job.sourcePeerId)
+                val localPeerId = UserIdentityManager.getInstance(context).getPeerId()
+
                 val session = InboundSession(
                     prompt = prompt,
                     tempFile = tempFile,
                     raf = raf,
-                    receivedChunks = BooleanArray(job.totalChunks)
+                    receivedChunks = BooleanArray(job.totalChunks),
+                    localPeerId = localPeerId,
+                    senderIp = senderIp
                 )
                 inboundSessions[transferId] = session
 
@@ -481,14 +505,14 @@ class TransferManager private constructor() {
 
                 // Send TRANSFER_ACCEPT packet
                 val acceptPacket = PacketBuilder.buildTransferResponsePacket(
-                    sourcePeerId = job.destinationPeerId,
+                    sourcePeerId = localPeerId,
                     destPeerId = job.sourcePeerId,
                     seqNum = LanSocketManager.getInstance().nextSequenceNumber(),
                     transferId = transferId,
                     accepted = true
                 )
-                LanSocketManager.getInstance().sendPacket(acceptPacket, job.sourcePeerId)
-                Log.d(TAG, "Accepted incoming transfer $transferId from ${job.sourcePeerId}")
+                LanSocketManager.getInstance().sendPacket(acceptPacket, job.sourcePeerId, senderIp)
+                Log.d(TAG, "Accepted incoming transfer $transferId from ${job.sourcePeerId} ($senderIp)")
 
             } catch (e: Exception) {
                 Log.e(TAG, "Error accepting transfer $transferId: ${e.message}", e)
@@ -508,7 +532,8 @@ class TransferManager private constructor() {
                 accepted = false,
                 reason = reason
             )
-            LanSocketManager.getInstance().sendPacket(rejectPacket, job.sourcePeerId)
+            val senderIp = LanSocketManager.getInstance().getPeerIp(job.sourcePeerId)
+            LanSocketManager.getInstance().sendPacket(rejectPacket, job.sourcePeerId, senderIp)
             updateJobState(transferId, TransferState.FAILED, reason = reason)
         }
     }
@@ -525,10 +550,12 @@ class TransferManager private constructor() {
         }
 
         // 2. Write chunk direct to disk via RandomAccessFile
+        var isNewChunk = false
         synchronized(session.raf) {
             ChunkManager.writeChunkDirect(session.raf, chunk)
             if (!session.receivedChunks[chunk.chunkIndex]) {
                 session.receivedChunks[chunk.chunkIndex] = true
+                isNewChunk = true
                 session.bytesReceived.addAndGet(chunk.payload.size.toLong())
                 session.recentBytes.addAndGet(chunk.payload.size.toLong())
             }
@@ -536,22 +563,29 @@ class TransferManager private constructor() {
 
         // 3. Send back TRANSFER_CHUNK_ACK
         val ackPacket = PacketBuilder.buildChunkAckPacket(
-            sourcePeerId = session.prompt.senderPeerId,
+            sourcePeerId = session.localPeerId,
             destPeerId = senderPeerId,
             seqNum = LanSocketManager.getInstance().nextSequenceNumber(),
             transferId = chunk.transferId,
             chunkIndex = chunk.chunkIndex
         )
-        LanSocketManager.getInstance().sendPacket(ackPacket, senderPeerId)
+        LanSocketManager.getInstance().sendPacketDirect(ackPacket, senderPeerId, session.senderIp)
 
-        // 4. Update UI progress
-        val received = session.bytesReceived.get()
-        val totalChunksReceived = session.receivedChunks.count { it }
-        updateJob(chunk.transferId) {
-            it.copy(
-                bytesTransferred = received,
-                transferredChunks = totalChunksReceived
-            )
+        // 4. Update UI progress throttled
+        if (isNewChunk) {
+            val totalReceivedChunks = session.chunksReceived.incrementAndGet()
+            val now = System.currentTimeMillis()
+            val lastUpdate = lastUiProgressUpdate[chunk.transferId] ?: 0L
+            if (now - lastUpdate >= 120L || totalReceivedChunks >= session.prompt.totalChunks) {
+                lastUiProgressUpdate[chunk.transferId] = now
+                val received = session.bytesReceived.get()
+                updateJob(chunk.transferId) {
+                    it.copy(
+                        bytesTransferred = received,
+                        transferredChunks = totalReceivedChunks
+                    )
+                }
+            }
         }
     }
 
@@ -565,16 +599,17 @@ class TransferManager private constructor() {
                     session.raf.close()
                 }
 
-                // 1. Verify Full File CRC32 Checksum
-                val isIntegrityValid = ChunkManager.verifyFileChecksum(session.tempFile, session.prompt.fullCrc32)
-                if (!isIntegrityValid) {
-                    Log.e(TAG, "Full-file CRC32 verification failed for $transferId! Corrupted transfer.")
-                    session.tempFile.delete()
-                    updateJobState(transferId, TransferState.FAILED, reason = "Integrity check failed (CRC32 mismatch)")
-                    return@launch
+                // 1. Verify Full File CRC32 Checksum (if full checksum was provided)
+                if (session.prompt.fullCrc32 != 0L) {
+                    val isIntegrityValid = ChunkManager.verifyFileChecksum(session.tempFile, session.prompt.fullCrc32)
+                    if (!isIntegrityValid) {
+                        Log.e(TAG, "Full-file CRC32 verification failed for $transferId! Corrupted transfer.")
+                        session.tempFile.delete()
+                        updateJobState(transferId, TransferState.FAILED, reason = "Integrity check failed (CRC32 mismatch)")
+                        return@launch
+                    }
+                    Log.d(TAG, "Full-file CRC32 verified successfully for $transferId!")
                 }
-
-                Log.d(TAG, "Full-file CRC32 verified successfully for $transferId!")
 
                 // 2. Move file to destination (Downloads/HyperShare or Cache/view_only)
                 val finalFile: File
@@ -585,7 +620,15 @@ class TransferManager private constructor() {
                     finalFile = File(viewOnlyDir, session.prompt.fileName)
                     if (finalFile.exists()) finalFile.delete()
                     session.tempFile.renameTo(finalFile)
-                    localUri = Uri.fromFile(finalFile)
+                    localUri = try {
+                        androidx.core.content.FileProvider.getUriForFile(
+                            context,
+                            "${context.packageName}.fileprovider",
+                            finalFile
+                        )
+                    } catch (e: Exception) {
+                        Uri.fromFile(finalFile)
+                    }
                 } else {
                     val downloadsDir = File(
                         Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS),
@@ -595,7 +638,16 @@ class TransferManager private constructor() {
                     if (finalFile.exists()) finalFile.delete()
                     session.tempFile.renameTo(finalFile)
 
-                    localUri = Uri.fromFile(finalFile)
+                    localUri = try {
+                        androidx.core.content.FileProvider.getUriForFile(
+                            context,
+                            "${context.packageName}.fileprovider",
+                            finalFile
+                        )
+                    } catch (e: Exception) {
+                        Log.w(TAG, "FileProvider URI generation fallback: ${e.message}")
+                        Uri.fromFile(finalFile)
+                    }
                     // Index with MediaStore so it appears in Gallery/Files
                     MediaScannerConnection.scanFile(context, arrayOf(finalFile.absolutePath), null, null)
                 }
@@ -650,14 +702,18 @@ class TransferManager private constructor() {
         val job = _jobs.value.find { it.id == transferId }
         if (job != null) {
             scope.launch {
+                val context = appContext
+                val localPeerId = if (context != null) UserIdentityManager.getInstance(context).getPeerId() else job.sourcePeerId
+                val destPeerId = if (job.isOutgoing) job.destinationPeerId else job.sourcePeerId
                 val cancelPacket = PacketBuilder.buildTransferCancelPacket(
-                    sourcePeerId = job.sourcePeerId,
-                    destPeerId = job.destinationPeerId,
+                    sourcePeerId = localPeerId,
+                    destPeerId = destPeerId,
                     seqNum = LanSocketManager.getInstance().nextSequenceNumber(),
                     transferId = transferId,
                     reason = reason
                 )
-                LanSocketManager.getInstance().sendPacket(cancelPacket, job.destinationPeerId)
+                val targetIp = LanSocketManager.getInstance().getPeerIp(destPeerId)
+                LanSocketManager.getInstance().sendPacket(cancelPacket, destPeerId, targetIp)
             }
         }
 
@@ -668,6 +724,12 @@ class TransferManager private constructor() {
         }
 
         updateJobState(transferId, TransferState.FAILED, reason = reason)
+    }
+
+    fun dismissJob(jobId: String) {
+        val list = _jobs.value.toMutableList()
+        list.removeAll { it.id == jobId }
+        _jobs.value = list
     }
 
     private fun updateSpeedMetrics() {
@@ -717,18 +779,23 @@ class TransferManager private constructor() {
     }
 
     private fun updateJobProgress(transferId: String, deltaBytes: Long) {
+        val now = System.currentTimeMillis()
+        val lastUpdate = lastUiProgressUpdate[transferId] ?: 0L
+        val shouldUpdateUi = (now - lastUpdate >= 120L)
+
         updateJob(transferId) { current ->
             val newBytes = (current.bytesTransferred + deltaBytes).coerceAtMost(current.fileSize)
             val newChunks = current.transferredChunks + 1
-            val elapsed = (System.currentTimeMillis() - current.createdAt).coerceAtLeast(1)
+            val elapsed = (now - current.createdAt).coerceAtLeast(1)
             val avgSpeed = (newBytes * 1000L) / elapsed
 
             // Rolling speed estimation based on recent delta
             val currentSpeed = (deltaBytes * 1000L / 100L).coerceAtLeast(avgSpeed)
             val peakSpeed = maxOf(current.peakSpeedBps, currentSpeed)
 
-            val pct = if (current.fileSize > 0) ((newBytes * 100) / current.fileSize).toInt() else 0
-            updateNotification(current.fileName, pct, "Sending: ${formatSpeed(currentSpeed)} (Avg: ${formatSpeed(avgSpeed)})")
+            if (shouldUpdateUi || newBytes >= current.fileSize) {
+                lastUiProgressUpdate[transferId] = now
+            }
 
             current.copy(
                 bytesTransferred = newBytes,

@@ -51,9 +51,11 @@ import com.hypershare.ui.theme.SurfaceCard
 import com.hypershare.ui.theme.TextPrimary
 import com.hypershare.ui.theme.TextSecondary
 import com.hypershare.ui.theme.WarningAmber
+import com.hypershare.ui.theme.ErrorRed
 import com.hypershare.model.TransferState
 import com.hypershare.model.TransferJob
 import com.hypershare.application.TransferManager
+import com.hypershare.ui.filebrowser.openFileIntent
 
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -77,7 +79,8 @@ fun ChatScreen(
     viewModel: ChatViewModel,
     onBackClick: () -> Unit,
     onConnectWifiDirect: (() -> Unit)? = null,
-    wifiDirectConnection: com.hypershare.service.WifiDirectConnectionState? = null
+    wifiDirectConnection: com.hypershare.service.WifiDirectConnectionState? = null,
+    isEmergencyMode: Boolean = false
 ) {
     val uiState by viewModel.uiState.collectAsState()
     var showMenu by remember { mutableStateOf(false) }
@@ -96,11 +99,11 @@ fun ChatScreen(
     val displayMessages = uiState.messages.distinctBy { it.id }
     val listState = rememberLazyListState()
 
-    // Observe active file transfers for this peer
+    // Observe active or recently completed file transfers for this peer
     val allTransferJobs by TransferManager.getInstance(context).jobs.collectAsState()
     val peerTransferJob = allTransferJobs.firstOrNull { job ->
         (job.destinationPeerId == uiState.peerId || job.sourcePeerId == uiState.peerId) &&
-        (job.state == TransferState.IN_PROGRESS || job.state == TransferState.QUEUED)
+        (job.state == TransferState.IN_PROGRESS || job.state == TransferState.QUEUED || job.state == TransferState.COMPLETED || job.state == TransferState.FAILED)
     }
 
     val chatFilePickerLauncher = rememberLauncherForActivityResult(
@@ -278,8 +281,8 @@ fun ChatScreen(
                 }
             }
 
-            // Wi-Fi Direct Emergency Mesh Connection Status Banner (when target IP is empty / Emergency Mode)
-            if (uiState.peerIpAddress.isEmpty() && wifiDirectConnection != null) {
+            // Wi-Fi Direct Emergency Mesh Connection Status Banner (only shown in Emergency Mode)
+            if (isEmergencyMode && uiState.peerIpAddress.isEmpty() && wifiDirectConnection != null) {
                 val isP2pConnected = wifiDirectConnection.isConnected
                 val isP2pConnecting = wifiDirectConnection.isConnecting
                 val statusText = when {
@@ -444,11 +447,22 @@ fun ChatScreen(
                 }
             }
 
-            // Active File Transfer Card (Live progress, speed gauge, ETA)
+            // Active File Transfer Card (Live progress, speed gauge, ETA, or Completed/Queued/Failed)
             if (peerTransferJob != null) {
                 val job = peerTransferJob
-                val progress = job.progress
-                val speedFormatted = TransferManager.getInstance().formatSpeed(job.currentSpeedBps)
+                val isDone = job.state == TransferState.COMPLETED
+                val isQueued = job.state == TransferState.QUEUED
+                val isFailed = job.state == TransferState.FAILED
+                val progress = if (isDone) 1f else job.progress
+
+                val statusText = when {
+                    isDone -> "Completed • Avg: ${TransferManager.getInstance().formatSpeed(job.averageSpeedBps)}"
+                    isFailed -> "Failed: ${job.failureReason ?: "Cancelled or timed out"}"
+                    isQueued && job.isOutgoing -> "Connecting & waiting for ${uiState.peerName} to accept..."
+                    isQueued && !job.isOutgoing -> "Incoming file request (${TransferManager.getInstance().formatSpeed(job.fileSize)})"
+                    job.isOutgoing -> "Sending ${(progress * 100).toInt()}% • ${TransferManager.getInstance().formatSpeed(job.currentSpeedBps)}"
+                    else -> "Receiving ${(progress * 100).toInt()}% • ${TransferManager.getInstance().formatSpeed(job.currentSpeedBps)}"
+                }
 
                 GlassCard(
                     modifier = Modifier
@@ -465,36 +479,143 @@ fun ChatScreen(
                                 modifier = Modifier.weight(1f),
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
-                                Text("⚡", fontSize = 16.sp)
-                                Spacer(modifier = Modifier.width(6.dp))
                                 Text(
-                                    text = "${if (job.isOutgoing) "Sending" else "Receiving"} ${job.fileName}",
-                                    color = TextPrimary,
-                                    fontSize = 12.sp,
-                                    fontWeight = FontWeight.Bold,
-                                    maxLines = 1,
-                                    overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
+                                    text = when {
+                                        isDone -> "✅"
+                                        isFailed -> "⚠️"
+                                        isQueued && !job.isOutgoing -> "📥"
+                                        else -> "⚡"
+                                    },
+                                    fontSize = 16.sp
                                 )
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Column {
+                                    Text(
+                                        text = job.fileName,
+                                        color = TextPrimary,
+                                        fontSize = 12.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        maxLines = 1,
+                                        overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
+                                    )
+                                    Text(
+                                        text = statusText,
+                                        color = when {
+                                            isDone -> ConnectedGreen
+                                            isFailed -> ErrorRed
+                                            isQueued -> WarningAmber
+                                            else -> SignalBlue
+                                        },
+                                        fontSize = 10.sp,
+                                        fontFamily = FontFamily.Monospace,
+                                        fontWeight = FontWeight.Medium
+                                    )
+                                }
                             }
-                            Spacer(modifier = Modifier.width(8.dp))
-                            Text(
-                                text = "${(progress * 100).toInt()}% • $speedFormatted",
-                                color = SignalBlue,
-                                fontSize = 11.sp,
-                                fontFamily = FontFamily.Monospace,
-                                fontWeight = FontWeight.Bold
-                            )
                         }
-                        Spacer(modifier = Modifier.height(6.dp))
-                        LinearProgressIndicator(
-                            progress = { progress },
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .height(4.dp)
-                                .clip(RoundedCornerShape(2.dp)),
-                            color = SignalBlue,
-                            trackColor = Color(0x33FFFFFF)
-                        )
+
+                        Spacer(modifier = Modifier.height(8.dp))
+
+                        when {
+                            isQueued && !job.isOutgoing -> {
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.End
+                                ) {
+                                    androidx.compose.material3.OutlinedButton(
+                                        onClick = { TransferManager.getInstance(context).rejectTransfer(job.id) },
+                                        colors = ButtonDefaults.outlinedButtonColors(contentColor = ErrorRed),
+                                        shape = RoundedCornerShape(8.dp)
+                                    ) {
+                                        Text("Decline", fontSize = 11.sp)
+                                    }
+                                    Spacer(modifier = Modifier.width(8.dp))
+                                    Button(
+                                        onClick = { TransferManager.getInstance(context).acceptTransfer(job.id) },
+                                        colors = ButtonDefaults.buttonColors(containerColor = ConnectedGreen),
+                                        shape = RoundedCornerShape(8.dp)
+                                    ) {
+                                        Text("Accept", fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                                    }
+                                }
+                            }
+
+                            isQueued && job.isOutgoing -> {
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.End
+                                ) {
+                                    androidx.compose.material3.OutlinedButton(
+                                        onClick = { TransferManager.getInstance(context).cancelTransfer(job.id, "Cancelled by user") },
+                                        colors = ButtonDefaults.outlinedButtonColors(contentColor = ErrorRed),
+                                        shape = RoundedCornerShape(8.dp)
+                                    ) {
+                                        Text("Cancel", fontSize = 11.sp)
+                                    }
+                                }
+                            }
+
+                            job.state == TransferState.IN_PROGRESS -> {
+                                Column {
+                                    LinearProgressIndicator(
+                                        progress = { progress },
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .height(4.dp)
+                                            .clip(RoundedCornerShape(2.dp)),
+                                        color = SignalBlue,
+                                        trackColor = Color(0x33FFFFFF)
+                                    )
+                                    Spacer(modifier = Modifier.height(6.dp))
+                                    androidx.compose.material3.OutlinedButton(
+                                        onClick = { TransferManager.getInstance(context).cancelTransfer(job.id, "Cancelled by user") },
+                                        colors = ButtonDefaults.outlinedButtonColors(contentColor = ErrorRed),
+                                        shape = RoundedCornerShape(8.dp),
+                                        modifier = Modifier.align(Alignment.End)
+                                    ) {
+                                        Text("Cancel", fontSize = 11.sp)
+                                    }
+                                }
+                            }
+
+                            isDone -> {
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.End
+                                ) {
+                                    androidx.compose.material3.OutlinedButton(
+                                        onClick = { TransferManager.getInstance(context).dismissJob(job.id) },
+                                        shape = RoundedCornerShape(8.dp)
+                                    ) {
+                                        Text("Dismiss", fontSize = 11.sp)
+                                    }
+                                    if (job.fileUri != null) {
+                                        Spacer(modifier = Modifier.width(8.dp))
+                                        Button(
+                                            onClick = { openFileIntent(context, job.fileUri, job.mimeType, job.fileName) },
+                                            colors = ButtonDefaults.buttonColors(containerColor = ConnectedGreen),
+                                            shape = RoundedCornerShape(8.dp)
+                                        ) {
+                                            Text("Open File", fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                                        }
+                                    }
+                                }
+                            }
+
+                            isFailed -> {
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.End
+                                ) {
+                                    androidx.compose.material3.OutlinedButton(
+                                        onClick = { TransferManager.getInstance(context).dismissJob(job.id) },
+                                        shape = RoundedCornerShape(8.dp)
+                                    ) {
+                                        Text("Dismiss", fontSize = 11.sp)
+                                    }
+                                }
+                            }
+                        }
                     }
                 }
             }

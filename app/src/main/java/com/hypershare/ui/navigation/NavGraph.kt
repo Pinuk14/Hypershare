@@ -318,7 +318,8 @@ fun HyperShareNavGraph(
                     onRefreshDiscovery = { discoveryService?.refreshDiscovery() },
                     onRefreshWifiDirectDiscovery = {
                         meshNetworkService?.wifiDirectController?.startPeerDiscovery()
-                    }
+                    },
+                    onOpenQrScanner = { pushDestination(QrScannerNavKey) }
                 )
             }
             entry<ChatNavKey> { key ->
@@ -336,9 +337,10 @@ fun HyperShareNavGraph(
                     )
                 }
 
-                // In Emergency Mode (no local IP), auto-initiate Wi-Fi Direct connection to the peer
-                LaunchedEffect(key.peerId, key.peerIp, meshNetworkService) {
-                    if (key.peerIp.isEmpty()) {
+                // In Emergency Mode only (P2P), auto-initiate Wi-Fi Direct connection to the peer if needed
+                val isEmergencyMode = meshNetworkService?.activeMode == PeerMode.MODE_2_MESH
+                LaunchedEffect(key.peerId, key.peerIp, meshNetworkService, isEmergencyMode) {
+                    if (isEmergencyMode && key.peerIp.isEmpty()) {
                         meshNetworkService?.requestConnectToPeer(key.peerId)
                     }
                 }
@@ -351,7 +353,8 @@ fun HyperShareNavGraph(
                     onConnectWifiDirect = {
                         meshNetworkService?.requestConnectToPeer(key.peerId)
                     },
-                    wifiDirectConnection = p2pState
+                    wifiDirectConnection = p2pState,
+                    isEmergencyMode = isEmergencyMode
                 )
             }
             entry<QrScannerNavKey> {
@@ -362,9 +365,14 @@ fun HyperShareNavGraph(
                     onOpenChat = { peerId ->
                         val activePeers = discoveryService?.getActivePeers() ?: emptyList()
                         val peer = activePeers.find { it.peerId == peerId }
-                        val ip = peer?.ipAddress?.hostAddress ?: ""
-                        val name = peer?.displayName ?: ""
-                        pushDestination(ChatNavKey(peerId = peerId, peerName = name, peerIp = ip, peerPort = peer?.port ?: 47200))
+                        val ip = peer?.ipAddress?.hostAddress
+                            ?: lanSocketManager.getPeerIp(peerId)
+                        val repo = com.hypershare.db.MessageRepository(context)
+                        val name = peer?.displayName
+                            ?: repo.getPeerDisplayName(peerId)
+                            ?: ""
+                        val port = peer?.port ?: 47200
+                        pushDestination(ChatNavKey(peerId = peerId, peerName = name, peerIp = ip, peerPort = port))
                     }
                 )
             }
@@ -378,7 +386,8 @@ fun HyperShareNavGraph(
                     onOpenPeers = {
                         activateNetworkMode(PeerMode.MODE_1_WIFI)
                         navigateTopLevel(PeerListNavKey(PeerMode.MODE_1_WIFI))
-                    }
+                    },
+                    onOpenQrScanner = { pushDestination(QrScannerNavKey) }
                 )
             }
             entry<AppSettingsNavKey> {
@@ -392,7 +401,8 @@ fun HyperShareNavGraph(
                     onOpenPeers = {
                         activateNetworkMode(PeerMode.MODE_1_WIFI)
                         navigateTopLevel(PeerListNavKey(PeerMode.MODE_1_WIFI))
-                    }
+                    },
+                    onOpenQrScanner = { pushDestination(QrScannerNavKey) }
                 )
             }
             entry<FileBrowserNavKey> {

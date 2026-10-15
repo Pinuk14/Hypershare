@@ -22,6 +22,8 @@ import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.launch
+import java.io.BufferedInputStream
+import java.io.BufferedOutputStream
 import java.io.DataInputStream
 import java.io.DataOutputStream
 import java.net.ServerSocket
@@ -37,6 +39,15 @@ class LanSocketManager private constructor() {
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val sequenceCounter = AtomicInteger(1)
+
+    private fun configureSocketPerformance(socket: Socket) {
+        try {
+            socket.keepAlive = true
+            socket.tcpNoDelay = true // Disable Nagle algorithm to prevent 40-200ms ACK latency spikes
+            socket.sendBufferSize = 1024 * 1024      // 1 MB send buffer
+            socket.receiveBufferSize = 1024 * 1024   // 1 MB receive buffer
+        } catch (_: Exception) {}
+    }
 
     private var serverSocket: ServerSocket? = null
     private var isRunning = false
@@ -256,7 +267,7 @@ class LanSocketManager private constructor() {
                 Log.d(TAG, "TCP server listening on port $port")
                 while (isRunning) {
                     val socket = serverSocket?.accept() ?: break
-                    socket.keepAlive = true
+                    configureSocketPerformance(socket)
                     Log.d(TAG, "Accepted connection from ${socket.inetAddress.hostAddress}")
                     handleIncomingSocket(socket)
                 }
@@ -267,10 +278,11 @@ class LanSocketManager private constructor() {
     }
 
     private fun handleIncomingSocket(socket: Socket) {
-        scope.launch {
+        scope.launch(Dispatchers.IO) {
+            configureSocketPerformance(socket)
             val senderIp = try { socket.inetAddress?.hostAddress ?: "unknown" } catch (_: Exception) { "unknown" }
             try {
-                val input = DataInputStream(socket.getInputStream())
+                val input = DataInputStream(BufferedInputStream(socket.getInputStream(), 256 * 1024))
                 while (isRunning && !socket.isClosed) {
                     val length = try {
                         input.readInt()
@@ -443,8 +455,8 @@ class LanSocketManager private constructor() {
                 try {
                     attempts++
                     val s = Socket()
+                    configureSocketPerformance(s)
                     s.connect(java.net.InetSocketAddress(targetIp, port), 2000)
-                    s.keepAlive = true
                     socket = s
                 } catch (e: Exception) {
                     Log.w(TAG, "Attempt $attempts/$maxAttempts: Handshake connect to $targetIp:$port failed (${e.message}), retrying in 400ms...")
@@ -491,11 +503,16 @@ class LanSocketManager private constructor() {
         )
         val helloBytes = PacketBuilder.serializePacket(helloPacket)
         val output = activeOutputStreams.getOrPut(targetPeerId) {
-            DataOutputStream(socket.getOutputStream())
+            DataOutputStream(BufferedOutputStream(socket.getOutputStream(), 256 * 1024))
         }
+        val frame = ByteArray(4 + helloBytes.size)
+        frame[0] = (helloBytes.size ushr 24).toByte()
+        frame[1] = (helloBytes.size ushr 16).toByte()
+        frame[2] = (helloBytes.size ushr 8).toByte()
+        frame[3] = helloBytes.size.toByte()
+        System.arraycopy(helloBytes, 0, frame, 4, helloBytes.size)
         synchronized(output) {
-            output.writeInt(helloBytes.size)
-            output.write(helloBytes)
+            output.write(frame)
             output.flush()
         }
     }
@@ -738,50 +755,62 @@ class LanSocketManager private constructor() {
     }
 
     fun sendPacket(packet: Packet, targetPeerId: String, targetIp: String = "") {
-        scope.launch {
-            try {
-                val key = if (targetPeerId.isNotEmpty() && activeSockets.containsKey(targetPeerId)) targetPeerId
-                          else if (targetIp.isNotEmpty() && activeSockets.containsKey(targetIp)) targetIp
-                          else ""
-                var socket = if (key.isNotEmpty()) activeSockets[key] else null
+        scope.launch(Dispatchers.IO) {
+            sendPacketDirect(packet, targetPeerId, targetIp)
+        }
+    }
 
-                if (socket == null || socket.isClosed) {
-                    if (targetIp.isEmpty()) {
-                        Log.w(TAG, "Cannot send packet ${packet.header.type} — no live socket for $targetPeerId")
-                        return@launch
-                    }
-                    val newSocket = Socket(targetIp, DEFAULT_PORT).apply { keepAlive = true }
-                    if (targetPeerId.isNotEmpty()) activeSockets[targetPeerId] = newSocket
-                    activeSockets[targetIp] = newSocket
-                    if (targetPeerId.isNotEmpty()) activeOutputStreams.remove(targetPeerId)
-                    activeOutputStreams.remove(targetIp)
-                    scope.launch(Dispatchers.IO) { handleIncomingSocket(newSocket) }
-                    socket = newSocket
-                }
+    fun sendPacketDirect(packet: Packet, targetPeerId: String, targetIp: String = "") {
+        try {
+            val key = if (targetPeerId.isNotEmpty() && activeSockets.containsKey(targetPeerId)) targetPeerId
+                      else if (targetIp.isNotEmpty() && activeSockets.containsKey(targetIp)) targetIp
+                      else ""
+            var socket = if (key.isNotEmpty()) activeSockets[key] else null
 
-                val streamKey = when {
-                    targetPeerId.isNotEmpty() && activeOutputStreams.containsKey(targetPeerId) -> targetPeerId
-                    targetIp.isNotEmpty() && activeOutputStreams.containsKey(targetIp) -> targetIp
-                    targetPeerId.isNotEmpty() -> targetPeerId
-                    else -> targetIp
+            if (socket == null || socket.isClosed) {
+                if (targetIp.isEmpty()) {
+                    Log.w(TAG, "Cannot send packet ${packet.header.type} — no live socket for $targetPeerId")
+                    return
                 }
-                val out = activeOutputStreams.getOrPut(streamKey) {
-                    DataOutputStream(socket.getOutputStream())
-                }
-
-                val bytes = PacketBuilder.serializePacket(packet)
-                synchronized(out) {
-                    out.writeInt(bytes.size)
-                    out.write(bytes)
-                    out.flush()
-                }
-            } catch (e: Exception) {
-                Log.e(TAG, "Failed to send packet ${packet.header.type} to $targetPeerId: ${e.message}", e)
-                if (targetPeerId.isNotEmpty()) activeSockets.remove(targetPeerId)
-                if (targetIp.isNotEmpty()) activeSockets.remove(targetIp)
+                val newSocket = Socket()
+                configureSocketPerformance(newSocket)
+                newSocket.connect(java.net.InetSocketAddress(targetIp, DEFAULT_PORT), 3000)
+                if (targetPeerId.isNotEmpty()) activeSockets[targetPeerId] = newSocket
+                activeSockets[targetIp] = newSocket
                 if (targetPeerId.isNotEmpty()) activeOutputStreams.remove(targetPeerId)
-                if (targetIp.isNotEmpty()) activeOutputStreams.remove(targetIp)
+                activeOutputStreams.remove(targetIp)
+                scope.launch(Dispatchers.IO) { handleIncomingSocket(newSocket) }
+                socket = newSocket
             }
+
+            val streamKey = when {
+                targetPeerId.isNotEmpty() && activeOutputStreams.containsKey(targetPeerId) -> targetPeerId
+                targetIp.isNotEmpty() && activeOutputStreams.containsKey(targetIp) -> targetIp
+                targetPeerId.isNotEmpty() -> targetPeerId
+                else -> targetIp
+            }
+            val out = activeOutputStreams.getOrPut(streamKey) {
+                DataOutputStream(BufferedOutputStream(socket.getOutputStream(), 256 * 1024))
+            }
+
+            val bytes = PacketBuilder.serializePacket(packet)
+            val frame = ByteArray(4 + bytes.size)
+            frame[0] = (bytes.size ushr 24).toByte()
+            frame[1] = (bytes.size ushr 16).toByte()
+            frame[2] = (bytes.size ushr 8).toByte()
+            frame[3] = bytes.size.toByte()
+            System.arraycopy(bytes, 0, frame, 4, bytes.size)
+
+            synchronized(out) {
+                out.write(frame)
+                out.flush()
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to send packet ${packet.header.type} to $targetPeerId: ${e.message}", e)
+            if (targetPeerId.isNotEmpty()) activeSockets.remove(targetPeerId)
+            if (targetIp.isNotEmpty()) activeSockets.remove(targetIp)
+            if (targetPeerId.isNotEmpty()) activeOutputStreams.remove(targetPeerId)
+            if (targetIp.isNotEmpty()) activeOutputStreams.remove(targetIp)
         }
     }
 

@@ -282,16 +282,6 @@ class MessageRepository(context: Context) {
             // Delete self if it got inserted into peers table
             if (!myPeerId.isNullOrBlank()) {
                 db.delete("peers", "peer_id = ? OR peer_id = 'local'", arrayOf(myPeerId))
-            }
-            if (!myUsername.isNullOrBlank()) {
-                val cleanUser = myUsername.lowercase().replace(Regex("[^a-z0-9]"), "")
-                db.delete(
-                    "peers",
-                    "REPLACE(REPLACE(REPLACE(LOWER(display_name), '_', ''), ' ', ''), '-', '') = ?",
-                    arrayOf(cleanUser)
-                )
-            }
-            if (!myPeerId.isNullOrBlank()) {
                 db.delete("messages", "peer_id = ? OR peer_id = 'local'", arrayOf(myPeerId))
             }
 
@@ -383,8 +373,6 @@ class MessageRepository(context: Context) {
             FROM peers p
             LEFT JOIN messages m ON p.peer_id = m.peer_id
             WHERE p.peer_id NOT IN ('peer-1', 'peer-2', 'demo-peer-1', 'demo-peer-2', 'local', ?)
-              AND p.peer_id NOT LIKE '%(%'
-              AND p.display_name NOT LIKE '%(%'
             GROUP BY p.peer_id
             ORDER BY last_activity DESC
         """.trimIndent()

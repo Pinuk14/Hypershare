@@ -21,9 +21,12 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -60,10 +63,17 @@ fun HomeScreen(
     val uiState by viewModel.uiState.collectAsState()
     val context = androidx.compose.ui.platform.LocalContext.current
 
-    val signedCardJson = remember(context) {
-        val username = com.hypershare.application.UserIdentityManager.getInstance(context).getUsername()
+    var currentUsername by remember {
+        mutableStateOf(com.hypershare.application.UserIdentityManager.getInstance(context).getUsername())
+    }
+
+    LaunchedEffect(Unit) {
+        currentUsername = com.hypershare.application.UserIdentityManager.getInstance(context).getUsername()
+    }
+
+    val signedCardJson = remember(currentUsername) {
         val identityManager = com.hypershare.identity.IdentityManager.getInstance(context)
-        val card = com.hypershare.identity.ContactCard.createSignedCard(identityManager, username)
+        val card = com.hypershare.identity.ContactCard.createSignedCard(identityManager, currentUsername)
         card.toJson()
     }
 
@@ -229,7 +239,11 @@ fun HomeScreen(
                     cornerRadius = 20.dp
                 ) {
                     Box(modifier = Modifier.padding(16.dp)) {
-                        QrCodeCard(shareId = uiState.shareId, payload = signedCardJson)
+                        QrCodeCard(
+                            shareId = uiState.shareId,
+                            payload = signedCardJson,
+                            displayName = currentUsername
+                        )
                     }
                 }
             }

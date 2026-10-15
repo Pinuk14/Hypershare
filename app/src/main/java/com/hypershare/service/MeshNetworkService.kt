@@ -22,7 +22,8 @@ class MeshNetworkService : Service() {
     val lanSocketManager = LanSocketManager.getInstance()
     lateinit var wifiDirectController: WifiDirectController
         private set
-    private var activeMode: PeerMode? = null
+    var activeMode: PeerMode? = null
+        private set
     private var hadP2pConnection = false
 
     inner class LocalBinder : Binder() {

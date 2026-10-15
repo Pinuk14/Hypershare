@@ -53,7 +53,8 @@ fun AppSettingsScreen(
     onOpenAccountSettings: () -> Unit,
     onOpenSecurityPlayground: () -> Unit,
     onBackClick: () -> Unit = onHomeClick,
-    onOpenPeers: () -> Unit = onHomeClick
+    onOpenPeers: () -> Unit = onHomeClick,
+    onOpenQrScanner: () -> Unit = {}
 ) {
     BackHandler {
         onBackClick()
@@ -78,7 +79,8 @@ fun AppSettingsScreen(
                 },
                 onOpenAppSettings = {},
                 onOpenAccountSettings = onOpenAccountSettings,
-                onOpenHome = onHomeClick
+                onOpenHome = onHomeClick,
+                onOpenQrScanner = onOpenQrScanner
             )
         }
     ) { padding ->

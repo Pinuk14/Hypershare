@@ -65,7 +65,7 @@ class PeerListViewModel(
                 delay(2000L)
                 val now = System.currentTimeMillis()
                 val current = _uiState.value.peers
-                val alive = current.filter { now - it.lastSeenTimestamp <= 6000L }
+                val alive = current.filter { now - it.lastSeenTimestamp <= 24000L }
                 if (alive.size != current.size) {
                     _uiState.value = _uiState.value.copy(peers = alive)
                     recomputeConversationItems()
@@ -236,14 +236,16 @@ class PeerListViewModel(
             for (peer in _uiState.value.peers) {
                 val alreadyInMap = itemsMap.containsKey(peer.peerId)
                 if (!alreadyInMap) {
+                    val isTrustedInRepo = repository?.isPeerTrusted(peer.peerId) ?: false
+                    val hasAcceptedInRepo = repository?.hasPeerAcceptedUs(peer.peerId) ?: false
                     itemsMap[peer.peerId] = PeerUiItem(
                         peerId = peer.peerId,
                         displayName = peer.displayName,
                         lastActivity = peer.lastSeenTimestamp,
                         lastMessageSnippet = null,
                         unreadCount = 0,
-                        isTrusted = false,
-                        hasPeerAccepted = false,
+                        isTrusted = isTrustedInRepo,
+                        hasPeerAccepted = hasAcceptedInRepo,
                         isOnlineOnLan = true,
                         ipAddress = peer.ipAddress?.hostAddress,
                         port = peer.port
@@ -261,12 +263,9 @@ class PeerListViewModel(
         for (item in itemsMap.values) {
             val cleanItemName = normalizeName(item.displayName)
 
-            // Filter self device completely by peerId, name, or local IP
+            // Filter self device completely by peerId, "local", or local IP (never by username)
             if (item.peerId == myPeerId ||
                 item.peerId == "local" ||
-                item.peerId.contains("(") ||
-                item.displayName.contains("(") ||
-                cleanItemName == cleanMyName ||
                 (!myLocalIp.isNullOrEmpty() && item.ipAddress == myLocalIp)
             ) {
                 continue

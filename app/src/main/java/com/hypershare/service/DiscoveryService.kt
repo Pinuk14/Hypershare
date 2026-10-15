@@ -78,7 +78,7 @@ class DiscoveryService : Service() {
         } catch (e: Exception) { }
 
         val myId = UserIdentityManager.getInstance(this).getPeerId()
-        localServiceName = "HyperShare_${myId}"
+        localServiceName = "HyperShare_${myId.take(32)}"
         startForegroundNotification()
     }
 
@@ -168,7 +168,7 @@ class DiscoveryService : Service() {
                 val myId = UserIdentityManager.getInstance(this@DiscoveryService).getPeerId()
                 // Filter own service even if mDNS appends a suffix like "_2" or "_(2)"
                 val isOwnService = service.serviceName.startsWith(localServiceName) ||
-                                   service.serviceName.contains(myId)
+                                   service.serviceName.contains(myId.take(32))
                 if (service.serviceType.startsWith(SERVICE_TYPE_PREFIX) && !isOwnService) {
                     queueResolve(service)
                 }
@@ -176,11 +176,9 @@ class DiscoveryService : Service() {
 
             override fun onServiceLost(service: NsdServiceInfo) {
                 val sName = service.serviceName
-                val cleanName = sName.removePrefix("HyperShare_").lowercase().replace(Regex("[^a-z0-9]"), "")
                 val matchingPeers = activePeers.values.filter { peer ->
                     peer.peerId == sName ||
-                    peer.peerId == sName.removePrefix("HyperShare_") ||
-                    peer.displayName.lowercase().replace(Regex("[^a-z0-9]"), "") == cleanName
+                    peer.peerId == sName.removePrefix("HyperShare_")
                 }
                 for (p in matchingPeers) {
                     activePeers.remove(p.peerId)
@@ -255,11 +253,10 @@ class DiscoveryService : Service() {
                 if (!isSelf && host != null) {
                     // Check if an active peer already exists with this exact IP
                     val existingPeer = activePeers.values.find { it.ipAddress?.hostAddress == host.hostAddress }
-                    val isExistingRealId = existingPeer != null && (existingPeer.peerId.length >= 16 || existingPeer.peerId.startsWith("peer-"))
-
-                    // If existing peer on same IP has genuine cryptographic ID, do not override with mDNS suffix
-                    if (!isExistingRealId) {
-                        // Remove old entry if key changed
+                    if (existingPeer != null && existingPeer.peerId == peerId) {
+                        // Refresh timestamp so mDNS keeps active peers alive
+                        activePeers[peerId] = existingPeer.copy(lastSeenTimestamp = System.currentTimeMillis())
+                    } else if (existingPeer == null || existingPeer.peerId.length < 16) {
                         if (existingPeer != null && existingPeer.peerId != peerId) {
                             activePeers.remove(existingPeer.peerId)
                         }
@@ -376,7 +373,12 @@ class DiscoveryService : Service() {
                                     }
                                 }
                             }
-                        } catch (e: Exception) { break }
+                        } catch (e: java.net.SocketException) {
+                            if (udpSocket?.isClosed == true || !isActive) break
+                        } catch (e: Exception) {
+                            if (!isActive) break
+                            kotlinx.coroutines.delay(50)
+                        }
                     }
                 }
 

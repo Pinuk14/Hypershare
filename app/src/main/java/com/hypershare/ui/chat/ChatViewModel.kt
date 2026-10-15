@@ -65,11 +65,13 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
             peerId.take(12)
         }
 
+        val resolvedIp = targetIp.ifEmpty { lanSocketMgr?.getPeerIp(peerId) ?: "" }
+
         // Reset UI state immediately to prevent showing previous peer's messages
         _uiState.value = ChatUiState(
             peerId = peerId,
             peerName = initialName,
-            peerIpAddress = targetIp,
+            peerIpAddress = resolvedIp,
             messages = emptyList()
         )
 
@@ -137,6 +139,15 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
                 mgr.contactAcceptEventsFlow.collect { event ->
                     if (event.peerId == peerId) {
                         _uiState.value = _uiState.value.copy(hasPeerAcceptedUs = true)
+                    }
+                }
+            }
+
+            // Observe peer handshake events to resolve LAN IP dynamically
+            viewModelScope.launch {
+                mgr.peerHandshakeEventsFlow.collect { event ->
+                    if (event.peerId == peerId && event.ipAddress.isNotEmpty()) {
+                        _uiState.value = _uiState.value.copy(peerIpAddress = event.ipAddress)
                     }
                 }
             }

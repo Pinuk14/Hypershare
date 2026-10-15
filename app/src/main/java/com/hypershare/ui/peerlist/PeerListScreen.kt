@@ -67,7 +67,8 @@ fun PeerListScreen(
     onRefreshDiscovery: (() -> Unit)? = null,
     onWifiDirectPeerClick: (WifiP2pDevice) -> Unit = {},
     onRefreshWifiDirectDiscovery: (() -> Unit)? = null,
-    onBackClick: () -> Unit = onHomeClick
+    onBackClick: () -> Unit = onHomeClick,
+    onOpenQrScanner: () -> Unit = {}
 ) {
     BackHandler {
         onBackClick()
@@ -96,7 +97,8 @@ fun PeerListScreen(
                 },
                 onOpenAppSettings = onOpenAppSettings,
                 onOpenAccountSettings = onOpenAccountSettings,
-                onOpenHome = onHomeClick
+                onOpenHome = onHomeClick,
+                onOpenQrScanner = onOpenQrScanner
             )
         }
     ) { padding ->

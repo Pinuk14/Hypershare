@@ -34,11 +34,11 @@ enum class NavTab {
 @Composable
 fun BottomNavBar(
     selectedTab: NavTab,
-    onTabSelected: (NavTab) -> Unit,
+    onTabSelected: (NavTab) -> Unit = {},
     onOpenAppSettings: () -> Unit = {},
     onOpenAccountSettings: () -> Unit = {},
     onOpenHome: () -> Unit = {},
-    onOpenQrScanner: () -> Unit = {},
+    onOpenQrScanner: (() -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {
     Box(
@@ -86,7 +86,13 @@ fun BottomNavBar(
             // Scan / Home Icon (⛶) -> Open QR Scanner
             Box(
                 modifier = Modifier
-                    .clickable { if (onOpenQrScanner != {}) onOpenQrScanner() else onOpenHome() }
+                    .clickable {
+                        if (onOpenQrScanner != null) {
+                            onOpenQrScanner()
+                        } else {
+                            onOpenHome()
+                        }
+                    }
                     .padding(10.dp),
                 contentAlignment = Alignment.Center
             ) {

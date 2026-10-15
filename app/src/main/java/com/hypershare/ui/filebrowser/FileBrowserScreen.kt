@@ -247,7 +247,7 @@ fun FileBrowserScreen(
                                 onCancel = { viewModel.cancelTransfer(job.id) },
                                 onOpenFile = {
                                     if (job.fileUri != null) {
-                                        openFileIntent(context, job.fileUri, job.mimeType)
+                                        openFileIntent(context, job.fileUri, job.mimeType, job.fileName)
                                     }
                                 }
                             )
@@ -275,7 +275,7 @@ fun FileBrowserScreen(
                     onOpenFile = {
                         viewModel.dismissCompletionDialog()
                         if (event.localUri != null) {
-                            openFileIntent(context, event.localUri, "*/*")
+                            openFileIntent(context, event.localUri, "*/*", event.fileName)
                         }
                     }
                 )
@@ -856,12 +856,46 @@ fun getFileIcon(name: String): String {
     }
 }
 
-fun openFileIntent(context: android.content.Context, uri: Uri, mimeType: String) {
+fun openFileIntent(context: android.content.Context, uri: Uri, mimeType: String = "*/*", fileName: String = "") {
     try {
-        val intent = Intent(Intent.ACTION_VIEW).apply {
-            setDataAndType(uri, mimeType.ifEmpty { "*/*" })
-            flags = Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_ACTIVITY_NEW_TASK
+        val contentUri: Uri = if (uri.scheme == "file") {
+            val file = java.io.File(uri.path ?: "")
+            if (file.exists()) {
+                try {
+                    androidx.core.content.FileProvider.getUriForFile(
+                        context,
+                        "${context.packageName}.fileprovider",
+                        file
+                    )
+                } catch (_: Exception) {
+                    uri
+                }
+            } else {
+                uri
+            }
+        } else {
+            uri
         }
-        context.startActivity(Intent.createChooser(intent, "Open with"))
-    } catch (_: Exception) {}
+
+        val name = fileName.ifEmpty { contentUri.lastPathSegment ?: "" }
+        val ext = name.substringAfterLast('.', "").lowercase()
+        val resolvedMime = when {
+            mimeType.isNotEmpty() && mimeType != "*/*" && !mimeType.contains("octet-stream") -> mimeType
+            ext.isNotEmpty() -> android.webkit.MimeTypeMap.getSingleton().getMimeTypeFromExtension(ext) ?: "*/*"
+            else -> context.contentResolver.getType(contentUri) ?: "*/*"
+        }
+
+        val intent = Intent(Intent.ACTION_VIEW).apply {
+            setDataAndType(contentUri, resolvedMime)
+            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        }
+        val chooser = Intent.createChooser(intent, "Open with $name").apply {
+            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        }
+        context.startActivity(chooser)
+    } catch (e: Exception) {
+        android.util.Log.e("FileBrowser", "Failed to open file $uri: ${e.message}", e)
+        android.widget.Toast.makeText(context, "Cannot open file: ${e.localizedMessage ?: "No app available"}", android.widget.Toast.LENGTH_SHORT).show()
+    }
 }

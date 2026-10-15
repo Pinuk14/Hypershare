@@ -1,6 +1,14 @@
 package com.hypershare.ui.settings
 
+import android.widget.Toast
+import androidx.activity.compose.BackHandler
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -17,6 +25,8 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.windowInsetsTopHeight
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.OutlinedTextField
@@ -24,6 +34,7 @@ import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -32,15 +43,20 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import kotlinx.coroutines.delay
 import com.hypershare.ui.components.BottomNavBar
 import com.hypershare.ui.components.GlassCard
 import com.hypershare.ui.components.NavTab
 import com.hypershare.ui.components.QrCodeCard
-import androidx.activity.compose.BackHandler
 import com.hypershare.ui.theme.BackgroundBase
 import com.hypershare.ui.theme.ConnectedGreen
 import com.hypershare.ui.theme.SignalBlue
@@ -54,7 +70,8 @@ fun AccountSettingsScreen(
     onHomeClick: () -> Unit,
     onOpenAppSettings: () -> Unit,
     onBackClick: () -> Unit = onHomeClick,
-    onOpenPeers: () -> Unit = onHomeClick
+    onOpenPeers: () -> Unit = onHomeClick,
+    onOpenQrScanner: () -> Unit = {}
 ) {
     BackHandler {
         onBackClick()
@@ -62,6 +79,37 @@ fun AccountSettingsScreen(
 
     val uiState by viewModel.uiState.collectAsState()
     var editingUsername by remember(uiState.username) { mutableStateOf(uiState.username) }
+    var saveAckMessage by remember { mutableStateOf<String?>(null) }
+
+    val context = LocalContext.current
+    val keyboardController = LocalSoftwareKeyboardController.current
+    val focusManager = LocalFocusManager.current
+
+    LaunchedEffect(Unit) {
+        viewModel.refreshState()
+    }
+
+    LaunchedEffect(saveAckMessage) {
+        if (saveAckMessage != null) {
+            delay(3000)
+            saveAckMessage = null
+        }
+    }
+
+    fun handleSave() {
+        val trimmed = editingUsername.trim()
+        if (trimmed.isEmpty()) {
+            Toast.makeText(context, "Username cannot be empty", Toast.LENGTH_SHORT).show()
+            return
+        }
+        val success = viewModel.updateUsername(trimmed)
+        if (success) {
+            keyboardController?.hide()
+            focusManager.clearFocus()
+            Toast.makeText(context, "Username updated to \"$trimmed\"", Toast.LENGTH_SHORT).show()
+            saveAckMessage = "✓ Username saved successfully"
+        }
+    }
 
     Scaffold(
         containerColor = BackgroundBase,
@@ -79,7 +127,8 @@ fun AccountSettingsScreen(
                 },
                 onOpenAppSettings = onOpenAppSettings,
                 onOpenAccountSettings = {},
-                onOpenHome = onHomeClick
+                onOpenHome = onHomeClick,
+                onOpenQrScanner = onOpenQrScanner
             )
         }
     ) { padding ->
@@ -182,8 +231,19 @@ fun AccountSettingsScreen(
                     ) {
                         OutlinedTextField(
                             value = editingUsername,
-                            onValueChange = { editingUsername = it },
+                            onValueChange = {
+                                editingUsername = it
+                                saveAckMessage = null
+                            },
                             placeholder = { Text("Enter Username...", color = TextSecondary) },
+                            singleLine = true,
+                            keyboardOptions = KeyboardOptions(
+                                imeAction = ImeAction.Done,
+                                capitalization = KeyboardCapitalization.Words
+                            ),
+                            keyboardActions = KeyboardActions(
+                                onDone = { handleSave() }
+                            ),
                             shape = RoundedCornerShape(12.dp),
                             colors = OutlinedTextFieldDefaults.colors(
                                 focusedBorderColor = SignalBlue,
@@ -199,12 +259,34 @@ fun AccountSettingsScreen(
                         Spacer(modifier = Modifier.width(8.dp))
 
                         Button(
-                            onClick = { viewModel.updateUsername(editingUsername) },
+                            onClick = { handleSave() },
                             colors = ButtonDefaults.buttonColors(containerColor = SignalBlue),
                             shape = RoundedCornerShape(12.dp),
                             modifier = Modifier.height(52.dp)
                         ) {
                             Text("Save", color = TextPrimary, fontWeight = FontWeight.Bold)
+                        }
+                    }
+
+                    AnimatedVisibility(
+                        visible = saveAckMessage != null,
+                        enter = fadeIn() + expandVertically(),
+                        exit = fadeOut() + shrinkVertically()
+                    ) {
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier
+                                .background(ConnectedGreen.copy(alpha = 0.15f), RoundedCornerShape(8.dp))
+                                .border(1.dp, ConnectedGreen.copy(alpha = 0.4f), RoundedCornerShape(8.dp))
+                                .padding(horizontal = 10.dp, vertical = 6.dp)
+                        ) {
+                            Text(
+                                text = saveAckMessage ?: "",
+                                color = ConnectedGreen,
+                                fontSize = 12.sp,
+                                fontWeight = FontWeight.SemiBold
+                            )
                         }
                     }
                 }
@@ -247,9 +329,14 @@ fun AccountSettingsScreen(
                 cornerRadius = 20.dp
             ) {
                 Box(modifier = Modifier.padding(16.dp)) {
-                    QrCodeCard(shareId = uiState.peerId)
+                    QrCodeCard(
+                        shareId = uiState.peerId,
+                        payload = uiState.signedCardJson,
+                        displayName = uiState.username
+                    )
                 }
             }
         }
     }
 }
+
