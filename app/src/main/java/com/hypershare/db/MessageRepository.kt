@@ -13,6 +13,59 @@ class MessageRepository(context: Context) {
         cleanupGhostAndDemoData()
     }
 
+    companion object {
+        private const val MEDIA_PREFIX = "[MEDIA:"
+        private const val MEDIA_SUFFIX = "]"
+
+        fun formatMediaText(mimeType: String, fileName: String, fileSize: Long, uri: String? = null, transferId: String? = null): String {
+            val safeMime = mimeType.replace("|", "/")
+            val safeName = fileName.replace("|", "_")
+            val safeUri = uri ?: ""
+            val safeTransferId = transferId ?: ""
+            return "$MEDIA_PREFIX$safeMime|$safeName|$fileSize|$safeUri|$safeTransferId$MEDIA_SUFFIX"
+        }
+
+        fun parseMediaText(text: String): MediaMeta? {
+            if (!text.startsWith(MEDIA_PREFIX) || !text.endsWith(MEDIA_SUFFIX)) return null
+            val inner = text.substring(MEDIA_PREFIX.length, text.length - MEDIA_SUFFIX.length)
+            val parts = inner.split("|")
+            if (parts.size < 3) return null
+            val mimeType = parts[0]
+            val fileName = parts[1]
+            val fileSize = parts[2].toLongOrNull() ?: 0L
+            val uri = if (parts.size > 3 && parts[3].isNotEmpty()) parts[3] else null
+            val transferId = if (parts.size > 4 && parts[4].isNotEmpty()) parts[4] else null
+            val ext = fileName.substringAfterLast('.', "").lowercase()
+            val mediaType = when {
+                mimeType.startsWith("video/") || listOf("mp4", "mkv", "avi", "mov", "webm", "3gp").contains(ext) -> "video"
+                mimeType.startsWith("image/") || listOf("jpg", "jpeg", "png", "webp", "gif", "bmp").contains(ext) -> "image"
+                mimeType.startsWith("audio/") || listOf("mp3", "wav", "m4a", "aac", "flac", "ogg").contains(ext) -> "audio"
+                else -> "document"
+            }
+            return MediaMeta(mediaType, mimeType, fileName, fileSize, uri, transferId)
+        }
+
+        fun formatSnippet(text: String?): String? {
+            if (text == null) return null
+            val meta = parseMediaText(text) ?: return text
+            return when (meta.mediaType) {
+                "video" -> "🎬 Video"
+                "image" -> "📷 Photo"
+                "audio" -> "🎵 Audio"
+                else -> "📁 ${meta.fileName}"
+            }
+        }
+    }
+
+    data class MediaMeta(
+        val mediaType: String,
+        val mimeType: String,
+        val fileName: String,
+        val fileSize: Long,
+        val uri: String?,
+        val transferId: String?
+    )
+
     fun getMessagesForPeer(peerId: String): List<ChatMessageItem> {
         val messages = mutableListOf<ChatMessageItem>()
         val db = dbHelper.readableDatabase
@@ -44,16 +97,35 @@ class MessageRepository(context: Context) {
                 val statusStr = it.getString(statusIndex)
                 val status = try { MessageStatus.valueOf(statusStr) } catch (_: Exception) { MessageStatus.SENT }
 
-                messages.add(
-                    ChatMessageItem(
-                        id = id,
-                        senderId = if (isOutgoing) "local" else peer,
-                        text = text,
-                        isOutgoing = isOutgoing,
-                        timestamp = timestamp,
-                        status = status
+                val mediaMeta = parseMediaText(text)
+                if (mediaMeta != null) {
+                    messages.add(
+                        ChatMessageItem(
+                            id = id,
+                            senderId = if (isOutgoing) "local" else peer,
+                            text = mediaMeta.fileName,
+                            isOutgoing = isOutgoing,
+                            timestamp = timestamp,
+                            status = status,
+                            mediaUri = mediaMeta.uri,
+                            mediaType = mediaMeta.mediaType,
+                            mediaName = mediaMeta.fileName,
+                            mediaSize = mediaMeta.fileSize,
+                            transferId = mediaMeta.transferId
+                        )
                     )
-                )
+                } else {
+                    messages.add(
+                        ChatMessageItem(
+                            id = id,
+                            senderId = if (isOutgoing) "local" else peer,
+                            text = text,
+                            isOutgoing = isOutgoing,
+                            timestamp = timestamp,
+                            status = status
+                        )
+                    )
+                }
             }
         }
         return messages
@@ -151,17 +223,113 @@ class MessageRepository(context: Context) {
                 val isOutgoing = it.getInt(it.getColumnIndexOrThrow("is_outgoing")) == 1
                 val statusStr = it.getString(it.getColumnIndexOrThrow("delivery_status"))
                 val status = try { MessageStatus.valueOf(statusStr) } catch (_: Exception) { MessageStatus.SENT }
-                return ChatMessageItem(
-                    id = id,
-                    senderId = if (isOutgoing) "local" else peerId,
-                    text = text,
-                    isOutgoing = isOutgoing,
-                    timestamp = timestamp,
-                    status = status
-                )
+
+                val mediaMeta = parseMediaText(text)
+                if (mediaMeta != null) {
+                    return ChatMessageItem(
+                        id = id,
+                        senderId = if (isOutgoing) "local" else peerId,
+                        text = mediaMeta.fileName,
+                        isOutgoing = isOutgoing,
+                        timestamp = timestamp,
+                        status = status,
+                        mediaUri = mediaMeta.uri,
+                        mediaType = mediaMeta.mediaType,
+                        mediaName = mediaMeta.fileName,
+                        mediaSize = mediaMeta.fileSize,
+                        transferId = mediaMeta.transferId
+                    )
+                } else {
+                    return ChatMessageItem(
+                        id = id,
+                        senderId = if (isOutgoing) "local" else peerId,
+                        text = text,
+                        isOutgoing = isOutgoing,
+                        timestamp = timestamp,
+                        status = status
+                    )
+                }
             }
         }
         return null
+    }
+
+    fun insertMediaMessage(
+        peerId: String,
+        messageId: String,
+        isOutgoing: Boolean,
+        fileName: String,
+        fileSize: Long,
+        mimeType: String,
+        localUri: String? = null,
+        transferId: String = messageId,
+        timestamp: Long = System.currentTimeMillis()
+    ) {
+        val mediaText = formatMediaText(mimeType, fileName, fileSize, localUri, transferId)
+        val ext = fileName.substringAfterLast('.', "").lowercase()
+        val mediaType = when {
+            mimeType.startsWith("video/") || listOf("mp4", "mkv", "avi", "mov", "webm", "3gp").contains(ext) -> "video"
+            mimeType.startsWith("image/") || listOf("jpg", "jpeg", "png", "webp", "gif", "bmp").contains(ext) -> "image"
+            mimeType.startsWith("audio/") || listOf("mp3", "wav", "m4a", "aac", "flac", "ogg").contains(ext) -> "audio"
+            else -> "document"
+        }
+        val message = ChatMessageItem(
+            id = messageId,
+            senderId = if (isOutgoing) "local" else peerId,
+            text = mediaText,
+            isOutgoing = isOutgoing,
+            timestamp = timestamp,
+            status = MessageStatus.DELIVERED,
+            mediaUri = localUri,
+            mediaType = mediaType,
+            mediaName = fileName,
+            mediaSize = fileSize,
+            transferId = transferId
+        )
+        insertMessage(peerId, message)
+    }
+
+    fun updateMediaMessageUri(transferId: String, localUri: String) {
+        try {
+            val db = dbHelper.writableDatabase
+            val cursor = db.query(
+                "messages",
+                arrayOf("id", "text"),
+                "id = ? OR text LIKE ?",
+                arrayOf(transferId, "%|$transferId]"),
+                null,
+                null,
+                null
+            )
+            cursor.use {
+                while (it.moveToNext()) {
+                    val id = it.getString(0)
+                    val text = it.getString(1)
+                    val meta = parseMediaText(text)
+                    if (meta != null) {
+                        val updatedText = formatMediaText(meta.mimeType, meta.fileName, meta.fileSize, localUri, meta.transferId)
+                        val values = ContentValues().apply {
+                            put("text", updatedText)
+                        }
+                        db.update("messages", values, "id = ?", arrayOf(id))
+                    }
+                }
+            }
+        } catch (_: Exception) {}
+    }
+
+    fun markAllOutgoingBeforeAsRead(peerId: String, timestamp: Long) {
+        try {
+            val db = dbHelper.writableDatabase
+            val values = ContentValues().apply {
+                put("delivery_status", MessageStatus.READ.name)
+            }
+            db.update("messages", values, "peer_id = ? AND is_outgoing = 1 AND timestamp <= ?", arrayOf(peerId, timestamp.toString()))
+        } catch (_: Exception) {}
+    }
+
+    fun getMediaForPeer(peerId: String): List<ChatMessageItem> {
+        return getMessagesForPeer(peerId).filter { it.mediaType != null }
     }
 
     fun savePeer(peerId: String, displayName: String, isTrusted: Boolean = false, hasPeerAccepted: Boolean = false, publicKey: String? = null) {
@@ -407,7 +575,7 @@ class MessageRepository(context: Context) {
                         isTrusted = isTrusted,
                         hasPeerAccepted = hasPeerAccepted,
                         lastActivity = if (lastActivity > 0) lastActivity else lastSeen,
-                        lastMessageSnippet = lastMessage,
+                        lastMessageSnippet = formatSnippet(lastMessage),
                         unreadCount = unreadCount
                     )
                 )

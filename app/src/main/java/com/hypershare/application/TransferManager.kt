@@ -3,11 +3,15 @@ package com.hypershare.application
 import android.app.NotificationManager
 import android.content.Context
 import android.content.Intent
+import android.content.ContentValues
 import android.media.MediaScannerConnection
 import android.net.Uri
+import android.os.Build
 import android.os.Environment
+import android.provider.MediaStore
 import android.provider.OpenableColumns
 import android.util.Log
+import android.webkit.MimeTypeMap
 import androidx.core.app.NotificationCompat
 import com.hypershare.model.DataChunk
 import com.hypershare.model.Packet
@@ -183,6 +187,22 @@ class TransferManager private constructor() {
             isOutgoing = true
         )
         addOrUpdateJob(job)
+
+        try {
+            val msgRepo = com.hypershare.db.MessageRepository(resolvedContext)
+            msgRepo.insertMediaMessage(
+                peerId = targetPeerId,
+                messageId = transferId,
+                isOutgoing = true,
+                fileName = fileName,
+                fileSize = fileSize,
+                mimeType = mimeType,
+                localUri = fileUri.toString(),
+                transferId = transferId
+            )
+        } catch (e: Exception) {
+            Log.e(TAG, "Error inserting outgoing media message: ${e.message}", e)
+        }
 
         val executionJob = scope.launch {
             executeOutboundTransfer(job, targetIp)
@@ -364,6 +384,11 @@ class TransferManager private constructor() {
             updateNotification(job.fileName, 100, "Transfer complete (${formatSpeed(avgSpeed)})", ongoing = false)
             Log.d(TAG, "Outbound transfer $transferId successfully completed in ${totalDurationMs}ms (Avg: ${formatSpeed(avgSpeed)})")
 
+            try {
+                val msgRepo = com.hypershare.db.MessageRepository(context)
+                msgRepo.updateMessageStatus(transferId, com.hypershare.ui.chat.MessageStatus.DELIVERED)
+            } catch (_: Exception) {}
+
         } catch (e: Exception) {
             Log.e(TAG, "Outbound transfer $transferId error: ${e.message}", e)
             updateJobState(transferId, TransferState.FAILED, reason = e.message ?: "Unknown error")
@@ -410,6 +435,24 @@ class TransferManager private constructor() {
                     )
                     addOrUpdateJob(job)
                     _incomingPrompts.tryEmit(prompt)
+
+                    appContext?.let { ctx ->
+                        try {
+                            val msgRepo = com.hypershare.db.MessageRepository(ctx)
+                            msgRepo.insertMediaMessage(
+                                peerId = prompt.senderPeerId,
+                                messageId = prompt.transferId,
+                                isOutgoing = false,
+                                fileName = prompt.fileName,
+                                fileSize = prompt.fileSize,
+                                mimeType = prompt.mimeType,
+                                localUri = null,
+                                transferId = prompt.transferId
+                            )
+                        } catch (e: Exception) {
+                            Log.e(TAG, "Error inserting incoming media message: ${e.message}", e)
+                        }
+                    }
 
                     Log.d(TAG, "Auto-accepting incoming transfer ${prompt.transferId} from ${prompt.senderPeerId}")
                     acceptTransfer(prompt.transferId)
@@ -611,45 +654,20 @@ class TransferManager private constructor() {
                     Log.d(TAG, "Full-file CRC32 verified successfully for $transferId!")
                 }
 
-                // 2. Move file to destination (Downloads/HyperShare or Cache/view_only)
-                val finalFile: File
-                val localUri: Uri
+                // 2. Move file to destination (MediaStore Movies/Pictures/Music/Downloads or Cache/view_only)
+                val localUri = saveIncomingFile(
+                    context = context,
+                    sourceFile = session.tempFile,
+                    fileName = session.prompt.fileName,
+                    mimeType = session.prompt.mimeType,
+                    isViewOnly = session.prompt.isViewOnly
+                )
 
-                if (session.prompt.isViewOnly) {
-                    val viewOnlyDir = File(context.cacheDir, "view_only").apply { mkdirs() }
-                    finalFile = File(viewOnlyDir, session.prompt.fileName)
-                    if (finalFile.exists()) finalFile.delete()
-                    session.tempFile.renameTo(finalFile)
-                    localUri = try {
-                        androidx.core.content.FileProvider.getUriForFile(
-                            context,
-                            "${context.packageName}.fileprovider",
-                            finalFile
-                        )
-                    } catch (e: Exception) {
-                        Uri.fromFile(finalFile)
-                    }
-                } else {
-                    val downloadsDir = File(
-                        Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS),
-                        "HyperShare"
-                    ).apply { mkdirs() }
-                    finalFile = File(downloadsDir, session.prompt.fileName)
-                    if (finalFile.exists()) finalFile.delete()
-                    session.tempFile.renameTo(finalFile)
-
-                    localUri = try {
-                        androidx.core.content.FileProvider.getUriForFile(
-                            context,
-                            "${context.packageName}.fileprovider",
-                            finalFile
-                        )
-                    } catch (e: Exception) {
-                        Log.w(TAG, "FileProvider URI generation fallback: ${e.message}")
-                        Uri.fromFile(finalFile)
-                    }
-                    // Index with MediaStore so it appears in Gallery/Files
-                    MediaScannerConnection.scanFile(context, arrayOf(finalFile.absolutePath), null, null)
+                try {
+                    val msgRepo = com.hypershare.db.MessageRepository(context)
+                    msgRepo.updateMediaMessageUri(transferId, localUri.toString())
+                } catch (e: Exception) {
+                    Log.e(TAG, "Error updating media message localUri: ${e.message}", e)
                 }
 
                 val durationMs = (System.currentTimeMillis() - session.startTimeMs).coerceAtLeast(1)
@@ -891,6 +909,117 @@ class TransferManager private constructor() {
             bps >= 1024 * 1024 -> String.format(java.util.Locale.US, "%.1f MB/s", bps.toDouble() / (1024 * 1024))
             bps >= 1024 -> String.format(java.util.Locale.US, "%.1f KB/s", bps.toDouble() / 1024)
             else -> "$bps B/s"
+        }
+    }
+
+    fun formatSize(bytes: Long): String {
+        return when {
+            bytes >= 1024 * 1024 * 1024 -> String.format(java.util.Locale.US, "%.1f GB", bytes.toDouble() / (1024 * 1024 * 1024))
+            bytes >= 1024 * 1024 -> String.format(java.util.Locale.US, "%.1f MB", bytes.toDouble() / (1024 * 1024))
+            bytes >= 1024 -> String.format(java.util.Locale.US, "%.1f KB", bytes.toDouble() / 1024)
+            else -> "$bytes B"
+        }
+    }
+
+    private fun saveIncomingFile(context: Context, sourceFile: File, fileName: String, mimeType: String, isViewOnly: Boolean): Uri {
+        if (isViewOnly) {
+            val viewOnlyDir = File(context.cacheDir, "view_only").apply { mkdirs() }
+            val finalFile = File(viewOnlyDir, fileName)
+            if (finalFile.exists()) finalFile.delete()
+            sourceFile.inputStream().use { input ->
+                finalFile.outputStream().use { output ->
+                    input.copyTo(output)
+                }
+            }
+            sourceFile.delete()
+            return try {
+                androidx.core.content.FileProvider.getUriForFile(
+                    context,
+                    "${context.packageName}.fileprovider",
+                    finalFile
+                )
+            } catch (e: Exception) {
+                Uri.fromFile(finalFile)
+            }
+        }
+
+        val ext = fileName.substringAfterLast('.', "").lowercase()
+        val resolvedMime = mimeType.ifEmpty {
+            if (ext.isNotEmpty()) MimeTypeMap.getSingleton().getMimeTypeFromExtension(ext) ?: "*/*" else "*/*"
+        }
+        val isVideo = resolvedMime.startsWith("video/") || listOf("mp4", "mkv", "avi", "mov", "webm", "3gp", "flv", "ts").contains(ext)
+        val isImage = resolvedMime.startsWith("image/") || listOf("jpg", "jpeg", "png", "webp", "gif", "bmp", "heic").contains(ext)
+        val isAudio = resolvedMime.startsWith("audio/") || listOf("mp3", "wav", "m4a", "aac", "flac", "ogg").contains(ext)
+
+        // 1. Primary path: Save directly to Android MediaStore on API 29+ (Android 10+)
+        // Videos and Images saved here immediately appear in the device's Gallery / Photos app
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            val (collectionUri, relativeDir) = when {
+                isVideo -> Pair(MediaStore.Video.Media.EXTERNAL_CONTENT_URI, "${Environment.DIRECTORY_MOVIES}/HyperShare")
+                isImage -> Pair(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, "${Environment.DIRECTORY_PICTURES}/HyperShare")
+                isAudio -> Pair(MediaStore.Audio.Media.EXTERNAL_CONTENT_URI, "${Environment.DIRECTORY_MUSIC}/HyperShare")
+                else -> Pair(MediaStore.Downloads.EXTERNAL_CONTENT_URI, "${Environment.DIRECTORY_DOWNLOADS}/HyperShare")
+            }
+
+            try {
+                val values = ContentValues().apply {
+                    put(MediaStore.MediaColumns.DISPLAY_NAME, fileName)
+                    put(MediaStore.MediaColumns.MIME_TYPE, resolvedMime)
+                    put(MediaStore.MediaColumns.RELATIVE_PATH, relativeDir)
+                    put(MediaStore.MediaColumns.IS_PENDING, 1)
+                }
+                val resolver = context.contentResolver
+                val itemUri = resolver.insert(collectionUri, values)
+                if (itemUri != null) {
+                    resolver.openOutputStream(itemUri)?.use { out ->
+                        sourceFile.inputStream().use { input ->
+                            input.copyTo(out)
+                        }
+                    }
+                    values.clear()
+                    values.put(MediaStore.MediaColumns.IS_PENDING, 0)
+                    resolver.update(itemUri, values, null, null)
+                    sourceFile.delete()
+                    Log.d(TAG, "Successfully saved $fileName to MediaStore: $itemUri")
+                    return itemUri
+                }
+            } catch (e: Exception) {
+                Log.w(TAG, "MediaStore insert failed for $fileName: ${e.message}, falling back to direct storage", e)
+            }
+        }
+
+        // 2. Direct storage fallback: stream bytes into Downloads/HyperShare or app external files
+        val primaryDir = File(
+            Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS),
+            "HyperShare"
+        )
+        val targetDir = if (primaryDir.exists() || primaryDir.mkdirs()) {
+            primaryDir
+        } else {
+            File(context.getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS) ?: context.filesDir, "HyperShare").apply { mkdirs() }
+        }
+
+        val finalFile = File(targetDir, fileName)
+        if (finalFile.exists()) finalFile.delete()
+        sourceFile.inputStream().use { input ->
+            finalFile.outputStream().use { output ->
+                input.copyTo(output)
+            }
+        }
+        sourceFile.delete()
+
+        // Index with MediaScanner so Gallery / Photos picks it up
+        MediaScannerConnection.scanFile(context, arrayOf(finalFile.absolutePath), arrayOf(resolvedMime), null)
+
+        return try {
+            androidx.core.content.FileProvider.getUriForFile(
+                context,
+                "${context.packageName}.fileprovider",
+                finalFile
+            )
+        } catch (e: Exception) {
+            Log.w(TAG, "FileProvider URI generation fallback: ${e.message}")
+            Uri.fromFile(finalFile)
         }
     }
 }

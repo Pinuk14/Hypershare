@@ -396,9 +396,10 @@ class LanSocketManager private constructor() {
                             appContext?.let { ctx ->
                                 val repository = com.hypershare.db.MessageRepository(ctx)
                                 scope.launch(Dispatchers.IO) {
+                                    val wasAlreadyAccepted = repository.hasPeerAcceptedUs(sourcePeerId)
                                     repository.markPeerAcceptanceReceived(sourcePeerId)
-                                    // If we also trusted this peer, send reciprocal CONTACT_ACCEPT so both sides are instantly mutually trusted
-                                    if (repository.isPeerTrusted(sourcePeerId)) {
+                                    // Only send reciprocal accept if this is a new transition and we also trust the peer
+                                    if (!wasAlreadyAccepted && repository.isPeerTrusted(sourcePeerId)) {
                                         val myPeerId = UserIdentityManager.getInstance(ctx).getPeerId()
                                         sendContactAcceptPacket(
                                             targetPeerId = sourcePeerId,
@@ -406,13 +407,14 @@ class LanSocketManager private constructor() {
                                             senderPeerId = myPeerId
                                         )
                                     }
+                                    // Only notify once on initial acceptance transition
+                                    if (!wasAlreadyAccepted) {
+                                        _contactAcceptEventsFlow.emit(ContactAcceptEvent(sourcePeerId))
+                                        val senderName = repository.getPeerDisplayName(sourcePeerId) ?: sourcePeerId.take(12)
+                                        showIncomingNotification(sourcePeerId, "$senderName accepted & saved your contact! Mutual pairing complete.")
+                                    }
                                 }
                             }
-                            _contactAcceptEventsFlow.emit(ContactAcceptEvent(sourcePeerId))
-                            val senderName = appContext?.let { ctx ->
-                                com.hypershare.db.MessageRepository(ctx).getPeerDisplayName(sourcePeerId)
-                            } ?: sourcePeerId.take(12)
-                            showIncomingNotification(sourcePeerId, "$senderName accepted & saved your contact! Mutual pairing complete.")
                         }
                         PacketType.TRANSFER_INIT,
                         PacketType.TRANSFER_COMPLETE,

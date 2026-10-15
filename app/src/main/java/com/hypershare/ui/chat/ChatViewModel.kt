@@ -12,6 +12,8 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
+import com.hypershare.application.TransferManager
+
 enum class MessageStatus {
     SENT,        // Single grey tick (In-flight / sent over socket)
     DELIVERED,   // Double grey tick (Received by recipient device)
@@ -25,7 +27,12 @@ data class ChatMessageItem(
     val isOutgoing: Boolean,
     val timestamp: Long = System.currentTimeMillis(),
     val status: MessageStatus = MessageStatus.SENT,
-    val isRelayed: Boolean = false
+    val isRelayed: Boolean = false,
+    val mediaUri: String? = null,
+    val mediaType: String? = null, // "video", "image", "audio", "document"
+    val mediaName: String? = null,
+    val mediaSize: Long = 0L,
+    val transferId: String? = null
 )
 
 data class ChatUiState(
@@ -102,8 +109,38 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
                 }
             }
 
+            // Sync any existing transfers for this peer into database
+            val currentJobs = TransferManager.getInstance().jobs.value.filter {
+                it.destinationPeerId == peerId || it.sourcePeerId == peerId
+            }
+            if (currentJobs.isNotEmpty()) {
+                withContext(Dispatchers.IO) {
+                    for (job in currentJobs) {
+                        if (historicalMessages.none { it.id == job.id || it.transferId == job.id }) {
+                            val isOut = job.sourcePeerId == myId || job.isOutgoing
+                            repository.insertMediaMessage(
+                                peerId = peerId,
+                                messageId = job.id,
+                                isOutgoing = isOut,
+                                fileName = job.fileName,
+                                fileSize = job.fileSize,
+                                mimeType = job.mimeType,
+                                localUri = job.fileUri?.toString(),
+                                transferId = job.id
+                            )
+                        }
+                    }
+                }
+            }
+
+            val finalMessages = if (currentJobs.isNotEmpty()) {
+                withContext(Dispatchers.IO) { repository.getMessagesForPeer(peerId) }
+            } else {
+                historicalMessages
+            }
+
             // Sort historical messages strictly for this peer
-            val sorted = historicalMessages
+            val sorted = finalMessages
                 .distinctBy { it.id }
                 .sortedBy { it.timestamp }
 
@@ -117,6 +154,22 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
 
             // Trigger READ_ACK for any unread incoming messages now that DB load is complete
             markMessagesAsRead()
+        }
+
+        // Observe incoming transfer completions to update media URIs in chat
+        viewModelScope.launch {
+            TransferManager.getInstance().completionEvents.collect {
+                refreshMessages()
+            }
+        }
+
+        // Observe incoming transfer prompts
+        viewModelScope.launch {
+            TransferManager.getInstance().incomingPrompts.collect { prompt ->
+                if (prompt.senderPeerId == peerId) {
+                    refreshMessages()
+                }
+            }
         }
 
         // Observe incoming socket messages
@@ -154,6 +207,19 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
+    fun refreshMessages() {
+        val currentPeerId = _uiState.value.peerId
+        if (currentPeerId.isEmpty() || currentPeerId == "peer-default") return
+        viewModelScope.launch {
+            val updated = withContext(Dispatchers.IO) {
+                repository.getMessagesForPeer(currentPeerId)
+            }
+            val sorted = updated.distinctBy { it.id }.sortedBy { it.timestamp }
+            _uiState.value = _uiState.value.copy(messages = sorted)
+            markMessagesAsRead()
+        }
+    }
+
     private data class Quintuple<A, B, C, D, E>(val first: A, val second: B, val third: C, val fourth: D, val fifth: E)
 
     fun markMessagesAsRead() {
@@ -170,11 +236,29 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
         viewModelScope.launch(Dispatchers.IO) {
             for (msg in unreadIncoming) {
                 repository.updateMessageStatus(msg.id, MessageStatus.READ)
+                socketManager?.sendAckPacket(
+                    targetPeerId = peerId,
+                    targetIp = targetIp,
+                    msgId = msg.id,
+                    ackType = com.hypershare.model.PacketType.READ_ACK,
+                    senderPeerId = myPeerId
+                )
             }
+        }
+    }
+
+    fun markMessageAsRead(message: ChatMessageItem) {
+        if (message.isOutgoing || message.status == MessageStatus.READ) return
+        val updated = _uiState.value.messages.map {
+            if (it.id == message.id) it.copy(status = MessageStatus.READ) else it
+        }
+        _uiState.value = _uiState.value.copy(messages = updated)
+        viewModelScope.launch(Dispatchers.IO) {
+            repository.updateMessageStatus(message.id, MessageStatus.READ)
             socketManager?.sendAckPacket(
-                targetPeerId = peerId,
-                targetIp = targetIp,
-                msgId = unreadIncoming.last().id,
+                targetPeerId = _uiState.value.peerId,
+                targetIp = _uiState.value.peerIpAddress,
+                msgId = message.id,
                 ackType = com.hypershare.model.PacketType.READ_ACK,
                 senderPeerId = myPeerId
             )
@@ -183,12 +267,22 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
 
     private fun handleAckEvent(msgId: String, status: MessageStatus) {
         val currentMessages = _uiState.value.messages
+        val ackedMsg = currentMessages.find { it.id == msgId }
         val updated = currentMessages.map { msg ->
-            if (msg.id == msgId) msg.copy(status = status) else msg
+            if (msg.id == msgId) {
+                msg.copy(status = status)
+            } else if (status == MessageStatus.READ && msg.isOutgoing && ackedMsg != null && msg.timestamp <= ackedMsg.timestamp) {
+                msg.copy(status = MessageStatus.READ)
+            } else {
+                msg
+            }
         }
         _uiState.value = _uiState.value.copy(messages = updated)
         viewModelScope.launch(Dispatchers.IO) {
             repository.updateMessageStatus(msgId, status)
+            if (status == MessageStatus.READ && ackedMsg != null) {
+                repository.markAllOutgoingBeforeAsRead(_uiState.value.peerId, ackedMsg.timestamp)
+            }
         }
     }
 

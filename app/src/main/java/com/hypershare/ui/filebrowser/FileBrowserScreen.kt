@@ -858,10 +858,12 @@ fun getFileIcon(name: String): String {
 
 fun openFileIntent(context: android.content.Context, uri: Uri, mimeType: String = "*/*", fileName: String = "") {
     try {
-        val contentUri: Uri = if (uri.scheme == "file") {
+        var contentUri: Uri = uri
+
+        if (uri.scheme == "file") {
             val file = java.io.File(uri.path ?: "")
             if (file.exists()) {
-                try {
+                contentUri = try {
                     androidx.core.content.FileProvider.getUriForFile(
                         context,
                         "${context.packageName}.fileprovider",
@@ -871,17 +873,49 @@ fun openFileIntent(context: android.content.Context, uri: Uri, mimeType: String 
                     uri
                 }
             } else {
-                uri
+                // Defensive recovery: check if the file exists in Movies, Pictures, Downloads, or cache
+                val nameOnly = fileName.ifEmpty { file.name }
+                val candidateDirs = listOf(
+                    java.io.File(android.os.Environment.getExternalStoragePublicDirectory(android.os.Environment.DIRECTORY_MOVIES), "HyperShare"),
+                    java.io.File(android.os.Environment.getExternalStoragePublicDirectory(android.os.Environment.DIRECTORY_PICTURES), "HyperShare"),
+                    java.io.File(android.os.Environment.getExternalStoragePublicDirectory(android.os.Environment.DIRECTORY_DOWNLOADS), "HyperShare"),
+                    java.io.File(context.getExternalFilesDir(android.os.Environment.DIRECTORY_DOWNLOADS), "HyperShare"),
+                    java.io.File(context.cacheDir, "transfers"),
+                    java.io.File(context.cacheDir, "view_only")
+                )
+                val recoveredFile = candidateDirs.firstNotNullOfOrNull { dir ->
+                    if (dir.exists()) {
+                        dir.listFiles()?.firstOrNull { it.name == nameOnly || it.name.startsWith(nameOnly) }
+                    } else null
+                }
+                if (recoveredFile != null && recoveredFile.exists()) {
+                    contentUri = try {
+                        androidx.core.content.FileProvider.getUriForFile(
+                            context,
+                            "${context.packageName}.fileprovider",
+                            recoveredFile
+                        )
+                    } catch (_: Exception) {
+                        Uri.fromFile(recoveredFile)
+                    }
+                }
             }
-        } else {
-            uri
         }
 
         val name = fileName.ifEmpty { contentUri.lastPathSegment ?: "" }
         val ext = name.substringAfterLast('.', "").lowercase()
         val resolvedMime = when {
             mimeType.isNotEmpty() && mimeType != "*/*" && !mimeType.contains("octet-stream") -> mimeType
-            ext.isNotEmpty() -> android.webkit.MimeTypeMap.getSingleton().getMimeTypeFromExtension(ext) ?: "*/*"
+            ext.isNotEmpty() -> android.webkit.MimeTypeMap.getSingleton().getMimeTypeFromExtension(ext)
+                ?: when (ext) {
+                    "mp4", "mkv", "avi", "mov", "webm", "3gp", "flv", "ts" -> "video/*"
+                    "jpg", "jpeg", "png", "webp", "gif", "bmp", "heic" -> "image/*"
+                    "mp3", "wav", "m4a", "aac", "flac", "ogg" -> "audio/*"
+                    "pdf" -> "application/pdf"
+                    "apk" -> "application/vnd.android.package-archive"
+                    "zip" -> "application/zip"
+                    else -> "*/*"
+                }
             else -> context.contentResolver.getType(contentUri) ?: "*/*"
         }
 
@@ -892,7 +926,18 @@ fun openFileIntent(context: android.content.Context, uri: Uri, mimeType: String 
         }
         val chooser = Intent.createChooser(intent, "Open with $name").apply {
             addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
         }
+
+        // Explicitly grant read permissions to all apps that can handle the intent
+        try {
+            val resInfoList = context.packageManager.queryIntentActivities(intent, android.content.pm.PackageManager.MATCH_DEFAULT_ONLY)
+            for (resolveInfo in resInfoList) {
+                val packageName = resolveInfo.activityInfo.packageName
+                context.grantUriPermission(packageName, contentUri, Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            }
+        } catch (_: Exception) {}
+
         context.startActivity(chooser)
     } catch (e: Exception) {
         android.util.Log.e("FileBrowser", "Failed to open file $uri: ${e.message}", e)
