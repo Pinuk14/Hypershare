@@ -13,7 +13,8 @@ sealed class ForwardDecision {
 class HopManager(private val routingTable: RoutingTable, private val localPeerId: String) {
 
     fun processPacket(packet: Packet): ForwardDecision {
-        if (packet.header.destinationPeerId == localPeerId) {
+        val dest = packet.header.destinationPeerId
+        if (dest == localPeerId || dest.isEmpty() || dest == "BROADCAST" || dest == "*") {
             return ForwardDecision.DeliverLocal(packet)
         }
 

@@ -224,46 +224,133 @@ fun AppSettingsScreen(
                 )
             }
 
-            // Developer Data Wipe Feature (Visible in testing/debug mode only)
-            val isDebuggable = (context.applicationInfo.flags and ApplicationInfo.FLAG_DEBUGGABLE) != 0
-            if (isDebuggable) {
-                Spacer(modifier = Modifier.height(24.dp))
+            // Developer Options Toggle Card
+            val isDeveloperMode by viewModel.isDeveloperMode.collectAsState()
+            val forwardedPacketsCount by com.hypershare.service.LanSocketManager.getInstance().forwardedPacketsCount.collectAsState()
+
+            GlassCard(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 20.dp),
+                cornerRadius = 16.dp
+            ) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(16.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = "Developer Options",
+                            color = TextPrimary,
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 14.sp
+                        )
+                        Spacer(modifier = Modifier.height(2.dp))
+                        Text(
+                            text = "Enable hop inspection, transit metrics, and diagnostics",
+                            color = TextSecondary,
+                            fontSize = 11.sp
+                        )
+                    }
+
+                    Switch(
+                        checked = isDeveloperMode,
+                        onCheckedChange = { viewModel.setDeveloperMode(context, it) },
+                        colors = SwitchDefaults.colors(
+                            checkedThumbColor = TextPrimary,
+                            checkedTrackColor = SignalBlue,
+                            uncheckedThumbColor = TextSecondary,
+                            uncheckedTrackColor = Color(0x33FFFFFF)
+                        )
+                    )
+                }
+            }
+
+            // Developer Diagnostics & Metrics Panel (Strictly visible only when Developer Mode is ON)
+            if (isDeveloperMode) {
+                Spacer(modifier = Modifier.height(16.dp))
 
                 GlassCard(
                     modifier = Modifier
                         .fillMaxWidth()
                         .padding(horizontal = 20.dp),
-                    cornerRadius = 16.dp
+                    cornerRadius = 16.dp,
+                    borderColor = Color(0x5538BDF8)
                 ) {
                     Column(
                         modifier = Modifier.padding(16.dp)
                     ) {
                         Text(
-                            text = "DEVELOPER OPTIONS (DEBUG ONLY)",
-                            color = Color(0xFFFF5555),
+                            text = "DEVELOPER DIAGNOSTICS & METRICS",
+                            color = SignalBlue,
                             fontWeight = FontWeight.Bold,
                             fontSize = 12.sp,
                             letterSpacing = 1.sp
                         )
-                        Spacer(modifier = Modifier.height(6.dp))
-                        Text(
-                            text = "Simulate a fresh install by erasing all databases, preferences, keys, and cached files.",
-                            color = TextSecondary,
-                            fontSize = 12.sp
-                        )
+                        Spacer(modifier = Modifier.height(10.dp))
+
+                        // Packets Forwarded Metric
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Column {
+                                Text(
+                                    text = "Packets Forwarded (Relayed)",
+                                    color = TextPrimary,
+                                    fontSize = 13.sp,
+                                    fontWeight = FontWeight.SemiBold
+                                )
+                                Text(
+                                    text = "Multi-hop packets routed via this node",
+                                    color = TextSecondary,
+                                    fontSize = 11.sp
+                                )
+                            }
+                            Text(
+                                text = "$forwardedPacketsCount",
+                                color = ConnectedGreen,
+                                fontSize = 20.sp,
+                                fontWeight = FontWeight.Black,
+                                fontFamily = FontFamily.Monospace
+                            )
+                        }
+
                         Spacer(modifier = Modifier.height(14.dp))
+
+                        Button(
+                            onClick = { com.hypershare.service.LanSocketManager.getInstance().resetForwardedPacketsCount() },
+                            colors = ButtonDefaults.buttonColors(containerColor = Color(0x33FFFFFF)),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(38.dp)
+                        ) {
+                            Text(
+                                text = "Reset Forwarded Packet Counter",
+                                color = TextPrimary,
+                                fontSize = 12.sp,
+                                fontWeight = FontWeight.SemiBold
+                            )
+                        }
+
+                        Spacer(modifier = Modifier.height(14.dp))
+
                         Button(
                             onClick = { viewModel.clearAllAppData(context) },
                             colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFFF3B30)),
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .height(44.dp)
+                                .height(42.dp)
                         ) {
                             Text(
                                 text = "⚠️ Wipe All App Data & Restart",
                                 color = TextPrimary,
                                 fontWeight = FontWeight.Bold,
-                                fontSize = 13.sp
+                                fontSize = 12.sp
                             )
                         }
                     }

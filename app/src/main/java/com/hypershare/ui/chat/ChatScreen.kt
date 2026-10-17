@@ -1,6 +1,8 @@
 package com.hypershare.ui.chat
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -8,6 +10,10 @@ import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.runtime.mutableStateListOf
+import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.text.AnnotatedString
+import java.nio.charset.StandardCharsets
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxHeight
@@ -140,6 +146,10 @@ fun ChatScreen(
     isEmergencyMode: Boolean = false
 ) {
     val uiState by viewModel.uiState.collectAsState()
+    val isDeveloperMode by com.hypershare.application.DeveloperSettingsManager.isDeveloperMode.collectAsState()
+    val selectedMessageIds = remember { mutableStateListOf<String>() }
+    var inspectingMessageDetails by remember { mutableStateOf<ChatMessageItem?>(null) }
+    val clipboardManager = androidx.compose.ui.platform.LocalClipboardManager.current
     var showMenu by remember { mutableStateOf(false) }
     var showSecurityInfo by remember { mutableStateOf(false) }
     var showSharedMedia by remember { mutableStateOf(false) }
@@ -151,6 +161,8 @@ fun ChatScreen(
     // Intercept back gesture: dismiss modals before exiting chat
     BackHandler {
         when {
+            selectedMessageIds.isNotEmpty() -> selectedMessageIds.clear()
+            inspectingMessageDetails != null -> inspectingMessageDetails = null
             inspectingMediaInfo != null -> inspectingMediaInfo = null
             showP2pHub -> showP2pHub = false
             viewingMediaItem != null -> viewingMediaItem = null
@@ -256,13 +268,113 @@ fun ChatScreen(
                     .padding(horizontal = 16.dp, vertical = 4.dp),
                 cornerRadius = 16.dp
             ) {
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(56.dp)
-                        .padding(horizontal = 14.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
+                if (selectedMessageIds.isNotEmpty()) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(56.dp)
+                            .padding(horizontal = 14.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        // Close / Deselect Button (✕)
+                        Box(
+                            modifier = Modifier
+                                .size(36.dp)
+                                .background(Color(0x22FFFFFF), CircleShape)
+                                .clickable { selectedMessageIds.clear() },
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Text("✕", color = TextPrimary, fontSize = 16.sp, fontWeight = FontWeight.Bold)
+                        }
+
+                        Spacer(modifier = Modifier.width(14.dp))
+
+                        Text(
+                            text = "${selectedMessageIds.size} selected",
+                            color = TextPrimary,
+                            fontSize = 16.sp,
+                            fontWeight = FontWeight.Bold
+                        )
+
+                        Spacer(modifier = Modifier.weight(1f))
+
+                        // Developer Message Inspection (Strictly visible only if Developer Mode is ON and 1 msg selected)
+                        if (isDeveloperMode && selectedMessageIds.size == 1) {
+                            val selectedMsg = uiState.messages.find { it.id == selectedMessageIds.first() }
+                            if (selectedMsg != null) {
+                                Box(
+                                    modifier = Modifier
+                                        .size(36.dp)
+                                        .background(SignalBlue.copy(alpha = 0.25f), CircleShape)
+                                        .clickable { inspectingMessageDetails = selectedMsg },
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    Icon(
+                                        painter = painterResource(R.drawable.ic_info),
+                                        contentDescription = "Inspect Hops & Technical Details",
+                                        tint = SignalBlue,
+                                        modifier = Modifier.size(20.dp)
+                                    )
+                                }
+                                Spacer(modifier = Modifier.width(8.dp))
+                            }
+                        }
+
+                        // Copy Button
+                        Box(
+                            modifier = Modifier
+                                .size(36.dp)
+                                .background(Color(0x22FFFFFF), CircleShape)
+                                .clickable {
+                                    val texts = uiState.messages
+                                        .filter { selectedMessageIds.contains(it.id) }
+                                        .mapNotNull { it.text.ifBlank { null } }
+                                        .joinToString("\n")
+                                    if (texts.isNotEmpty()) {
+                                        clipboardManager.setText(AnnotatedString(texts))
+                                        android.widget.Toast.makeText(context, "Copied to clipboard", android.widget.Toast.LENGTH_SHORT).show()
+                                    }
+                                    selectedMessageIds.clear()
+                                },
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Icon(
+                                painter = painterResource(R.drawable.ic_content_copy),
+                                contentDescription = "Copy Messages",
+                                tint = TextPrimary,
+                                modifier = Modifier.size(18.dp)
+                            )
+                        }
+
+                        Spacer(modifier = Modifier.width(8.dp))
+
+                        // Delete Button
+                        Box(
+                            modifier = Modifier
+                                .size(36.dp)
+                                .background(Color(0x33FF3B30), CircleShape)
+                                .clickable {
+                                    viewModel.deleteMessages(selectedMessageIds.toList())
+                                    selectedMessageIds.clear()
+                                },
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Icon(
+                                painter = painterResource(R.drawable.ic_delete),
+                                contentDescription = "Delete Messages",
+                                tint = Color(0xFFFF5555),
+                                modifier = Modifier.size(18.dp)
+                            )
+                        }
+                    }
+                } else {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(56.dp)
+                            .padding(horizontal = 14.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
                     // Back Arrow Button
                     Box(
                         modifier = Modifier
@@ -441,6 +553,7 @@ fun ChatScreen(
                     }
                 }
             }
+            }
 
             // Wi-Fi Direct Emergency Mesh Connection Status Banner (only shown in Emergency Mode)
             if (isEmergencyMode) {
@@ -598,33 +711,100 @@ fun ChatScreen(
                         }
                         is ChatRowItem.SingleMessage -> {
                             val msg = row.message
+                            val isSelected = selectedMessageIds.contains(msg.id)
                             val matchingJob = allTransferJobs.firstOrNull { job ->
                                 job.id == msg.transferId ||
                                 (job.fileName == msg.mediaName && (job.destinationPeerId == uiState.peerId || job.sourcePeerId == uiState.peerId))
                             }
-                            GlassChatBubble(
-                                message = msg,
-                                activeJob = matchingJob,
-                                photoRotations = photoRotations,
-                                onMediaClick = { viewingMediaItem = it },
-                                onInfoClick = { inspectingMediaInfo = it },
-                                onAcceptTransfer = { transferId ->
-                                    TransferManager.getInstance(context).acceptTransfer(transferId)
-                                },
-                                onRejectTransfer = { transferId ->
-                                    TransferManager.getInstance(context).rejectTransfer(transferId)
-                                },
-                                onCancelTransfer = { transferId ->
-                                    TransferManager.getInstance(context).cancelTransfer(transferId, "Cancelled by user")
-                                }
-                            )
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clip(RoundedCornerShape(12.dp))
+                                    .then(if (isSelected) Modifier.background(SignalBlue.copy(alpha = 0.28f)) else Modifier)
+                                    .combinedClickable(
+                                        onClick = {
+                                            if (selectedMessageIds.isNotEmpty()) {
+                                                if (isSelected) selectedMessageIds.remove(msg.id)
+                                                else selectedMessageIds.add(msg.id)
+                                            }
+                                        },
+                                        onLongClick = {
+                                            if (isDeveloperMode && selectedMessageIds.isEmpty()) {
+                                                selectedMessageIds.add(msg.id)
+                                                inspectingMessageDetails = msg
+                                            } else {
+                                                if (isSelected) selectedMessageIds.remove(msg.id)
+                                                else selectedMessageIds.add(msg.id)
+                                            }
+                                        }
+                                    )
+                                    .padding(horizontal = 4.dp, vertical = 2.dp)
+                            ) {
+                                GlassChatBubble(
+                                    message = msg,
+                                    activeJob = matchingJob,
+                                    photoRotations = photoRotations,
+                                    onMediaClick = {
+                                        if (selectedMessageIds.isNotEmpty()) {
+                                            if (isSelected) selectedMessageIds.remove(msg.id)
+                                            else selectedMessageIds.add(msg.id)
+                                        } else {
+                                            viewingMediaItem = it
+                                        }
+                                    },
+                                    onInfoClick = { inspectingMediaInfo = it },
+                                    onAcceptTransfer = { transferId ->
+                                        TransferManager.getInstance(context).acceptTransfer(transferId)
+                                    },
+                                    onRejectTransfer = { transferId ->
+                                        TransferManager.getInstance(context).rejectTransfer(transferId)
+                                    },
+                                    onCancelTransfer = { transferId ->
+                                        TransferManager.getInstance(context).cancelTransfer(transferId, "Cancelled by user")
+                                    }
+                                )
+                            }
                         }
                         is ChatRowItem.MediaAlbum -> {
-                            WhatsAppMediaAlbumBubble(
-                                album = row.messages,
-                                onMediaClick = { viewingMediaItem = it },
-                                onInfoClick = { inspectingMediaInfo = it }
-                            )
+                            val albumIds = row.messages.map { it.id }
+                            val isAlbumSelected = albumIds.any { selectedMessageIds.contains(it) }
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clip(RoundedCornerShape(12.dp))
+                                    .then(if (isAlbumSelected) Modifier.background(SignalBlue.copy(alpha = 0.28f)) else Modifier)
+                                    .combinedClickable(
+                                        onClick = {
+                                            if (selectedMessageIds.isNotEmpty()) {
+                                                if (isAlbumSelected) selectedMessageIds.removeAll(albumIds)
+                                                else selectedMessageIds.addAll(albumIds)
+                                            }
+                                        },
+                                        onLongClick = {
+                                            if (isDeveloperMode && selectedMessageIds.isEmpty()) {
+                                                selectedMessageIds.addAll(albumIds)
+                                                inspectingMessageDetails = row.messages.firstOrNull()
+                                            } else {
+                                                if (isAlbumSelected) selectedMessageIds.removeAll(albumIds)
+                                                else selectedMessageIds.addAll(albumIds)
+                                            }
+                                        }
+                                    )
+                                    .padding(horizontal = 4.dp, vertical = 2.dp)
+                            ) {
+                                WhatsAppMediaAlbumBubble(
+                                    album = row.messages,
+                                    onMediaClick = {
+                                        if (selectedMessageIds.isNotEmpty()) {
+                                            if (isAlbumSelected) selectedMessageIds.removeAll(albumIds)
+                                            else selectedMessageIds.addAll(albumIds)
+                                        } else {
+                                            viewingMediaItem = it
+                                        }
+                                    },
+                                    onInfoClick = { inspectingMediaInfo = it }
+                                )
+                            }
                         }
                     }
                 }
@@ -1078,6 +1258,117 @@ fun ChatScreen(
                 onRefreshWifiDirect?.invoke()
             },
             onDismiss = { showP2pHub = false }
+        )
+    }
+
+    if (inspectingMessageDetails != null) {
+        MessageTechnicalDetailsDialog(
+            message = inspectingMessageDetails!!,
+            targetPeerId = uiState.peerId,
+            onDismiss = { inspectingMessageDetails = null }
+        )
+    }
+}
+
+@Composable
+fun MessageTechnicalDetailsDialog(
+    message: ChatMessageItem,
+    targetPeerId: String,
+    onDismiss: () -> Unit
+) {
+    val route = com.hypershare.routing.RoutingTable.getInstance().getRoute(
+        if (message.isOutgoing) targetPeerId else message.senderId.ifEmpty { targetPeerId }
+    )
+    val hopCount = route?.hopCount ?: if (message.isRelayed) 2 else 1
+    val nextHop = route?.nextHopPeerId ?: if (hopCount == 1) (if (message.isOutgoing) targetPeerId else "Direct") else "Multi-hop Relay"
+    val fullDateFormat = remember(message.timestamp) {
+        java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss.SSS", java.util.Locale.getDefault()).format(java.util.Date(message.timestamp))
+    }
+
+    Dialog(
+        onDismissRequest = onDismiss,
+        properties = DialogProperties(usePlatformDefaultWidth = false)
+    ) {
+        GlassCard(
+            modifier = Modifier
+                .fillMaxWidth(0.92f)
+                .padding(16.dp),
+            cornerRadius = 20.dp,
+            borderColor = SignalBlue
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(20.dp)
+            ) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Text(
+                        text = "🛠 MESSAGE TECHNICAL INFO",
+                        color = SignalBlue,
+                        fontWeight = FontWeight.Black,
+                        fontSize = 13.sp,
+                        letterSpacing = 1.sp
+                    )
+                    Box(
+                        modifier = Modifier
+                            .size(28.dp)
+                            .background(Color(0x22FFFFFF), CircleShape)
+                            .clickable { onDismiss() },
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Text("✕", color = TextPrimary, fontSize = 14.sp, fontWeight = FontWeight.Bold)
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(14.dp))
+
+                TechnicalInfoRow("Hop Count", "$hopCount HOP${if (hopCount > 1) "S" else ""}", ConnectedGreen)
+                TechnicalInfoRow("Next Hop Target", nextHop, TextPrimary)
+                TechnicalInfoRow("Transmission Mode", if (message.isEmergency) "Mode 2: Wi-Fi Direct Mesh (P2P)" else "Mode 1: Local Network (LAN)", WarningAmber)
+                TechnicalInfoRow("Delivery Status", message.status.name, SignalBlue)
+                TechnicalInfoRow("Message ID", message.id, TextSecondary)
+                TechnicalInfoRow("Timestamp (UTC/Local)", fullDateFormat, TextPrimary)
+                TechnicalInfoRow("Epoch Millis", "${message.timestamp} ms", TextSecondary)
+                TechnicalInfoRow("Direction", if (message.isOutgoing) "OUTBOUND (Local -> Peer)" else "INBOUND (Peer -> Local)", TextPrimary)
+                TechnicalInfoRow("Sender Peer ID", if (message.isOutgoing) "Local Node" else message.senderId.ifEmpty { targetPeerId }, TextSecondary)
+                TechnicalInfoRow("Destination Peer ID", if (message.isOutgoing) targetPeerId else "Local Node", TextSecondary)
+                TechnicalInfoRow("Payload Size", "${message.text.toByteArray(StandardCharsets.UTF_8).size} bytes", TextPrimary)
+                if (message.mediaType != null) {
+                    TechnicalInfoRow("Media Type", message.mediaType.uppercase(), WarningAmber)
+                    TechnicalInfoRow("Transfer Avg Speed", "${message.avgSpeedBps} B/s", ConnectedGreen)
+                    TechnicalInfoRow("Transfer Duration", "${message.transferDurationMs} ms", TextPrimary)
+                }
+
+                Spacer(modifier = Modifier.height(18.dp))
+
+                Button(
+                    onClick = onDismiss,
+                    colors = ButtonDefaults.buttonColors(containerColor = SignalBlue),
+                    modifier = Modifier.fillMaxWidth().height(40.dp)
+                ) {
+                    Text("Close Inspector", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun TechnicalInfoRow(label: String, value: String, valueColor: Color) {
+    Column(modifier = Modifier.padding(vertical = 3.dp)) {
+        Text(text = label, color = TextSecondary, fontSize = 10.sp, fontWeight = FontWeight.Medium)
+        Text(
+            text = value,
+            color = valueColor,
+            fontSize = 12.sp,
+            fontWeight = FontWeight.SemiBold,
+            fontFamily = FontFamily.Monospace,
+            maxLines = 2,
+            overflow = TextOverflow.Ellipsis
         )
     }
 }

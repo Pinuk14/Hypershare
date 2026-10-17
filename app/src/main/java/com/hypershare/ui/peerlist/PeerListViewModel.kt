@@ -109,6 +109,22 @@ class PeerListViewModel(
         }
     }
 
+    fun clearChatHistory(peerId: String) {
+        val repo = repository ?: return
+        viewModelScope.launch(Dispatchers.IO) {
+            repo.deleteChatHistory(peerId)
+            loadConversations()
+        }
+    }
+
+    fun deleteContact(peerId: String, context: Context) {
+        val repo = repository ?: return
+        viewModelScope.launch(Dispatchers.IO) {
+            repo.deleteContactAndData(peerId, context)
+            loadConversations()
+        }
+    }
+
     fun setMode(mode: PeerMode) {
         _uiState.value = _uiState.value.copy(currentMode = mode)
         recomputeConversationItems()

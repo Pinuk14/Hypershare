@@ -17,7 +17,7 @@ object AppModule {
 
     fun provideStreamController(): StreamController = StreamController()
 
-    fun provideRoutingTable(): RoutingTable = RoutingTable()
+    fun provideRoutingTable(): RoutingTable = RoutingTable.getInstance()
 
     fun provideModeController(): ModeController = ModeController()
 

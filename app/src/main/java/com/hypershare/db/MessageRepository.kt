@@ -173,6 +173,34 @@ class MessageRepository(context: Context) {
         db.delete("messages", "peer_id = ?", arrayOf(peerId))
     }
 
+    fun deleteMessages(ids: List<String>) {
+        if (ids.isEmpty()) return
+        val db = dbHelper.writableDatabase
+        val placeholders = ids.joinToString(",") { "?" }
+        db.delete("messages", "id IN ($placeholders)", ids.toTypedArray())
+    }
+
+    fun deleteContactAndData(peerId: String, context: Context) {
+        if (peerId.isEmpty()) return
+        val db = dbHelper.writableDatabase
+        val p2pMac = getPeerP2pMac(peerId)
+
+        db.delete("messages", "peer_id = ?", arrayOf(peerId))
+        db.delete("peers", "peer_id = ?", arrayOf(peerId))
+        com.hypershare.security.PeerKeyStore.instance.removePeerKey(peerId)
+
+        try {
+            val prefs = context.getSharedPreferences("hypershare_p2p_mappings", Context.MODE_PRIVATE)
+            val editor = prefs.edit().remove("peer:$peerId")
+            if (!p2pMac.isNullOrEmpty()) {
+                editor.remove("mac:$p2pMac")
+            }
+            editor.apply()
+        } catch (_: Exception) {}
+
+        com.hypershare.routing.RoutingTable.getInstance().removeRoute(peerId)
+    }
+
     fun getOutgoingMessageCountForPeer(peerId: String): Int {
         if (peerId.isEmpty()) return 0
         val db = dbHelper.readableDatabase

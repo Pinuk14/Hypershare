@@ -386,6 +386,16 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
         _uiState.value = _uiState.value.copy(messages = emptyList())
     }
 
+    fun deleteMessages(messageIds: List<String>) {
+        if (messageIds.isEmpty()) return
+        val idSet = messageIds.toSet()
+        viewModelScope.launch(Dispatchers.IO) {
+            repository.deleteMessages(messageIds)
+        }
+        val currentMessages = _uiState.value.messages.filterNot { it.id in idSet }
+        _uiState.value = _uiState.value.copy(messages = currentMessages)
+    }
+
     fun acceptContactTrust() {
         val currentPeerId = _uiState.value.peerId
         val targetIp = _uiState.value.peerIpAddress

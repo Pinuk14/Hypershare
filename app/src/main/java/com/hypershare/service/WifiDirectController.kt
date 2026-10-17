@@ -34,7 +34,8 @@ data class WifiDirectConnectionState(
     val isConnecting: Boolean = false,
     val isConnected: Boolean = false,
     val isGroupOwner: Boolean = false,
-    val groupOwnerIpAddress: String? = null
+    val groupOwnerIpAddress: String? = null,
+    val clientCount: Int = 0
 )
 
 class WifiDirectController(context: Context) {
@@ -282,7 +283,7 @@ class WifiDirectController(context: Context) {
             resetWifiDirect { startPeerDiscovery(false) }
             return
         }
-        if (_connectionState.value.isConnected || _connectionState.value.isConnecting) return
+        if ((_connectionState.value.isConnected && !_connectionState.value.isGroupOwner) || _connectionState.value.isConnecting) return
         val ch = ensureChannel() ?: return
 
         _connectionState.value = _connectionState.value.copy(isDiscovering = true)
@@ -421,6 +422,14 @@ class WifiDirectController(context: Context) {
      * allowing zero-touch mutual Wi-Fi Direct WPS PBC negotiation without tie-breaker collisions.
      */
     fun calculateGoIntent(targetMac: String, myPeerId: String = "", targetPeerId: String = ""): Int {
+        // If this device is ALREADY the group owner, maintain GO intent (15)
+        if (_connectionState.value.isConnected && _connectionState.value.isGroupOwner) {
+            return 15
+        }
+        // If connecting as a client to an already formed group, request client role (0)
+        if (_connectionState.value.isConnected && !_connectionState.value.isGroupOwner) {
+            return 0
+        }
         if (myPeerId.isNotEmpty() && targetPeerId.isNotEmpty() && myPeerId != targetPeerId) {
             return if (myPeerId >= targetPeerId) 15 else 0
         }
@@ -466,13 +475,29 @@ class WifiDirectController(context: Context) {
                 }
                 return@requestConnectionInfo
             }
-            _connectionState.value = WifiDirectConnectionState(
-                isDiscovering = false,
-                isConnecting = false,
-                isConnected = info.groupFormed,
-                isGroupOwner = info.groupFormed && info.isGroupOwner,
-                groupOwnerIpAddress = hostAddress
-            )
+            if (info.groupFormed && info.isGroupOwner) {
+                wifiP2pManager.requestGroupInfo(ch) { group ->
+                    val count = group?.clientList?.size ?: 0
+                    Log.d(TAG, "GO group info updated: clientCount=$count clients=${group?.clientList?.map { it.deviceName }}")
+                    _connectionState.value = WifiDirectConnectionState(
+                        isDiscovering = _connectionState.value.isDiscovering,
+                        isConnecting = false,
+                        isConnected = true,
+                        isGroupOwner = true,
+                        groupOwnerIpAddress = hostAddress,
+                        clientCount = count
+                    )
+                }
+            } else {
+                _connectionState.value = WifiDirectConnectionState(
+                    isDiscovering = false,
+                    isConnecting = false,
+                    isConnected = info.groupFormed,
+                    isGroupOwner = info.groupFormed && info.isGroupOwner,
+                    groupOwnerIpAddress = hostAddress,
+                    clientCount = 0
+                )
+            }
         }
     }
 

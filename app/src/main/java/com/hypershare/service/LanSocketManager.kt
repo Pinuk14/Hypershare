@@ -13,14 +13,20 @@ import com.hypershare.model.PacketType
 import com.hypershare.protocol.PacketBuilder
 import com.hypershare.protocol.PacketParser
 import com.hypershare.application.UserIdentityManager
+import com.hypershare.routing.ForwardDecision
+import com.hypershare.routing.HopManager
+import com.hypershare.routing.RoutingTable
 import com.hypershare.ui.chat.ChatMessageItem
 import com.hypershare.ui.chat.MessageStatus
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
+import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import java.io.BufferedInputStream
 import java.io.BufferedOutputStream
@@ -37,8 +43,15 @@ data class PeerHandshakeEvent(val peerId: String, val ipAddress: String)
 
 class LanSocketManager private constructor() {
 
+    val routingTable: RoutingTable = RoutingTable.getInstance()
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val sequenceCounter = AtomicInteger(1)
+    private val _forwardedPacketsCount = MutableStateFlow(0)
+    val forwardedPacketsCount: StateFlow<Int> = _forwardedPacketsCount.asStateFlow()
+
+    fun resetForwardedPacketsCount() {
+        _forwardedPacketsCount.value = 0
+    }
 
     private fun configureSocketPerformance(socket: Socket) {
         try {
@@ -320,13 +333,47 @@ class LanSocketManager private constructor() {
                         activeSockets[senderIp] = socket
                     }
 
+                    // Multi-hop routing check: Relay packets destined for other nodes
+                    val localPeerId = appContext?.let { UserIdentityManager.getInstance(it).getPeerId() }.orEmpty()
+                    val hopManager = HopManager(routingTable, localPeerId)
+                    when (val decision = hopManager.processPacket(packet)) {
+                        is ForwardDecision.Relay -> {
+                            Log.d(TAG, "Relaying packet ${packet.header.type} from $sourcePeerId to ${packet.header.destinationPeerId} via nextHop=${decision.nextHopRoute.nextHopPeerId}")
+                            _forwardedPacketsCount.value += 1
+                            sendPacketDirect(decision.packet, targetPeerId = decision.nextHopRoute.nextHopPeerId)
+                            continue
+                        }
+                        is ForwardDecision.DropExpiredTtl -> {
+                            Log.w(TAG, "Dropping packet ${packet.header.type} from $sourcePeerId to ${packet.header.destinationPeerId}: TTL expired")
+                            continue
+                        }
+                        is ForwardDecision.DropNoRoute -> {
+                            Log.w(TAG, "Dropping packet ${packet.header.type} to ${packet.header.destinationPeerId}: no route in routing table")
+                            continue
+                        }
+                        is ForwardDecision.DeliverLocal -> {
+                            // Proceed with local delivery
+                        }
+                    }
+
                     when (packet.header.type) {
                         PacketType.HELLO -> {
-                            Log.d(TAG, "HELLO from peerId=$sourcePeerId ip=$senderIp")
+                            Log.d(TAG, "HELLO from peerId=$sourcePeerId ip=$senderIp (ttl=${packet.header.ttl})")
                             if (sourcePeerId.isNotEmpty()) {
+                                val calculatedHopCount = if (packet.header.ttl < 8) (8 - packet.header.ttl.toInt() + 1) else 1
+                                val immediateSender = getImmediatePeerForSocket(socket) ?: sourcePeerId
+                                val nextHop = if (calculatedHopCount == 1) sourcePeerId else immediateSender
+                                routingTable.updateRoute(
+                                    destinationPeerId = sourcePeerId,
+                                    nextHopPeerId = nextHop,
+                                    nextHopAddress = socket.inetAddress,
+                                    hopCount = calculatedHopCount,
+                                    sequenceNumber = packet.header.sequenceNumber
+                                )
                                 _peerHandshakeEventsFlow.emit(PeerHandshakeEvent(sourcePeerId, senderIp))
                                 sendHelloResponseIfNeeded(socket, sourcePeerId)
                                 flushPendingMessagesForPeer(sourcePeerId)
+                                introduceConnectedPeers(sourcePeerId, socket)
                             }
                         }
                         PacketType.MSG -> {
@@ -439,6 +486,8 @@ class LanSocketManager private constructor() {
                 deadKeys.forEach { key ->
                     activeSockets.remove(key)
                     activeOutputStreams.remove(key)
+                    routingTable.removeRoute(key)
+                    routingTable.removeRoutesVia(key)
                 }
                 helloResponsesSent.remove(socket)
                 try { socket.close() } catch (_: Exception) { }
@@ -494,6 +543,51 @@ class LanSocketManager private constructor() {
                 activeSockets.remove(targetIp)
                 activeOutputStreams.remove(targetIp)
             }
+        }
+    }
+
+    private fun getImmediatePeerForSocket(socket: Socket): String? {
+        return activeSockets.entries.firstOrNull { (k, v) ->
+            v === socket && !k.contains(".") && !k.contains(":")
+        }?.key
+    }
+
+    private fun introduceConnectedPeers(newPeerId: String, newSocket: Socket) {
+        val context = appContext ?: return
+        val localPeerId = UserIdentityManager.getInstance(context).getPeerId()
+        val directPeers = routingTable.getDirectPeers().filter {
+            it.destinationPeerId != newPeerId && it.destinationPeerId != localPeerId
+        }
+        if (directPeers.isEmpty()) return
+
+        Log.d(TAG, "Introducing new peer $newPeerId to ${directPeers.size} existing direct peers in group")
+        for (existing in directPeers) {
+            val existingPeerId = existing.destinationPeerId
+            // Announce new peer to existing peer with TTL=7 (1 hop away through this hub)
+            val introToExisting = Packet(
+                header = PacketHeader(
+                    type = PacketType.HELLO,
+                    ttl = 7,
+                    sequenceNumber = sequenceCounter.getAndIncrement(),
+                    sourcePeerId = newPeerId,
+                    destinationPeerId = existingPeerId
+                ),
+                payload = newPeerId.toByteArray(StandardCharsets.UTF_8)
+            )
+            sendPacket(introToExisting, targetPeerId = existingPeerId)
+
+            // Announce existing peer to new peer with TTL=7
+            val introToNew = Packet(
+                header = PacketHeader(
+                    type = PacketType.HELLO,
+                    ttl = 7,
+                    sequenceNumber = sequenceCounter.getAndIncrement(),
+                    sourcePeerId = existingPeerId,
+                    destinationPeerId = newPeerId
+                ),
+                payload = existingPeerId.toByteArray(StandardCharsets.UTF_8)
+            )
+            sendPacket(introToNew, targetPeerId = newPeerId)
         }
     }
 
@@ -558,7 +652,10 @@ class LanSocketManager private constructor() {
     ) {
         scope.launch {
             try {
+                val route = if (targetPeerId.isNotEmpty()) routingTable.getRoute(targetPeerId) else null
+                val actualNextHop = route?.nextHopPeerId ?: targetPeerId
                 val key = if (targetPeerId.isNotEmpty() && activeSockets.containsKey(targetPeerId)) targetPeerId
+                          else if (actualNextHop.isNotEmpty() && activeSockets.containsKey(actualNextHop)) actualNextHop
                           else if (targetIp.isNotEmpty() && activeSockets.containsKey(targetIp)) targetIp
                           else ""
                 var socket = if (key.isNotEmpty()) activeSockets[key] else null
@@ -603,6 +700,7 @@ class LanSocketManager private constructor() {
 
                 val streamKey = when {
                     targetPeerId.isNotEmpty() && activeOutputStreams.containsKey(targetPeerId) -> targetPeerId
+                    actualNextHop.isNotEmpty() && activeOutputStreams.containsKey(actualNextHop) -> actualNextHop
                     targetIp.isNotEmpty() && activeOutputStreams.containsKey(targetIp) -> targetIp
                     targetPeerId.isNotEmpty() -> targetPeerId
                     else -> targetIp
@@ -772,7 +870,10 @@ class LanSocketManager private constructor() {
 
     fun sendPacketDirect(packet: Packet, targetPeerId: String, targetIp: String = "") {
         try {
+            val route = if (targetPeerId.isNotEmpty()) routingTable.getRoute(targetPeerId) else null
+            val actualNextHop = route?.nextHopPeerId ?: targetPeerId
             val key = if (targetPeerId.isNotEmpty() && activeSockets.containsKey(targetPeerId)) targetPeerId
+                      else if (actualNextHop.isNotEmpty() && activeSockets.containsKey(actualNextHop)) actualNextHop
                       else if (targetIp.isNotEmpty() && activeSockets.containsKey(targetIp)) targetIp
                       else ""
             var socket = if (key.isNotEmpty()) activeSockets[key] else null
@@ -795,6 +896,7 @@ class LanSocketManager private constructor() {
 
             val streamKey = when {
                 targetPeerId.isNotEmpty() && activeOutputStreams.containsKey(targetPeerId) -> targetPeerId
+                actualNextHop.isNotEmpty() && activeOutputStreams.containsKey(actualNextHop) -> actualNextHop
                 targetIp.isNotEmpty() && activeOutputStreams.containsKey(targetIp) -> targetIp
                 targetPeerId.isNotEmpty() -> targetPeerId
                 else -> targetIp
@@ -838,6 +940,8 @@ class LanSocketManager private constructor() {
         deadPeerKeys.forEach { key ->
             activeSockets.remove(key)
             activeOutputStreams.remove(key)
+            routingTable.removeRoute(key)
+            routingTable.removeRoutesVia(key)
         }
         if (socket != null) helloResponsesSent.remove(socket)
     }
@@ -849,6 +953,7 @@ class LanSocketManager private constructor() {
         activeSockets.clear()
         activeOutputStreams.clear()
         helloResponsesSent.clear()
+        routingTable.clear()
     }
 
 }

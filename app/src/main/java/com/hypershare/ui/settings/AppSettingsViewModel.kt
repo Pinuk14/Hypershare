@@ -4,6 +4,7 @@ import android.app.ActivityManager
 import android.content.Context
 import android.os.Process
 import androidx.lifecycle.ViewModel
+import com.hypershare.application.DeveloperSettingsManager
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -19,12 +20,18 @@ class AppSettingsViewModel : ViewModel() {
     private val _uiState = MutableStateFlow(AppSettingsUiState())
     val uiState: StateFlow<AppSettingsUiState> = _uiState.asStateFlow()
 
+    val isDeveloperMode: StateFlow<Boolean> = DeveloperSettingsManager.isDeveloperMode
+
     fun toggleDarkMode(isDark: Boolean) {
         _uiState.value = _uiState.value.copy(isDarkMode = isDark)
     }
 
     fun toggleAutoSwitch(autoSwitch: Boolean) {
         _uiState.value = _uiState.value.copy(autoSwitchEmergencyMode = autoSwitch)
+    }
+
+    fun setDeveloperMode(context: Context, enabled: Boolean) {
+        DeveloperSettingsManager.setDeveloperMode(context, enabled)
     }
 
     fun clearAllAppData(context: Context) {

@@ -21,10 +21,16 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.combinedClickable
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.ui.res.painterResource
 import com.hypershare.R
 import androidx.compose.material3.pulltorefresh.PullToRefreshBox
@@ -32,7 +38,9 @@ import androidx.compose.material3.pulltorefresh.rememberPullToRefreshState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -84,6 +92,8 @@ fun PeerListScreen(
 
     val isWifiDirectMode = uiState.currentMode == PeerMode.MODE_2_MESH
     val displayItems = uiState.conversationItems
+    var selectedPeerForAction by remember { mutableStateOf<PeerUiItem?>(null) }
+    var showDeleteConfirmation by remember { mutableStateOf<PeerUiItem?>(null) }
 
     Scaffold(
         containerColor = BackgroundBase,
@@ -341,6 +351,9 @@ fun PeerListScreen(
                                     isEmergencyMode = isWifiDirectMode,
                                     onClick = {
                                         onPeerClick(item.peerId)
+                                    },
+                                    onLongClick = {
+                                        selectedPeerForAction = item
                                     }
                                 )
                             }
@@ -350,13 +363,109 @@ fun PeerListScreen(
             }
         }
     }
+
+    // Action dialog on conversation long-press
+    if (selectedPeerForAction != null) {
+        val peer = selectedPeerForAction!!
+        AlertDialog(
+            onDismissRequest = { selectedPeerForAction = null },
+            containerColor = BackgroundBase,
+            title = {
+                Text(
+                    text = peer.displayName,
+                    color = TextPrimary,
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 17.sp
+                )
+            },
+            text = {
+                Column {
+                    Text(
+                        text = "Choose an action for this conversation:",
+                        color = TextSecondary,
+                        fontSize = 13.sp
+                    )
+                    Spacer(modifier = Modifier.height(16.dp))
+                    Button(
+                        onClick = {
+                            viewModel.clearChatHistory(peer.peerId)
+                            selectedPeerForAction = null
+                        },
+                        colors = ButtonDefaults.buttonColors(containerColor = Color(0x33FFFFFF)),
+                        modifier = Modifier.fillMaxWidth().height(42.dp)
+                    ) {
+                        Text("Clear Chat History", color = TextPrimary, fontSize = 13.sp)
+                    }
+                    Spacer(modifier = Modifier.height(10.dp))
+                    Button(
+                        onClick = {
+                            showDeleteConfirmation = peer
+                            selectedPeerForAction = null
+                        },
+                        colors = ButtonDefaults.buttonColors(containerColor = Color(0x33FF3B30)),
+                        modifier = Modifier.fillMaxWidth().height(42.dp)
+                    ) {
+                        Text("Delete Contact & Keys", color = Color(0xFFFF5555), fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                    }
+                }
+            },
+            confirmButton = {},
+            dismissButton = {
+                TextButton(onClick = { selectedPeerForAction = null }) {
+                    Text("Cancel", color = TextSecondary)
+                }
+            }
+        )
+    }
+
+    // Confirmation dialog for permanent contact & cryptographic key purge
+    if (showDeleteConfirmation != null) {
+        val peer = showDeleteConfirmation!!
+        AlertDialog(
+            onDismissRequest = { showDeleteConfirmation = null },
+            containerColor = BackgroundBase,
+            title = {
+                Text(
+                    text = "Delete Contact?",
+                    color = Color(0xFFFF5555),
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 17.sp
+                )
+            },
+            text = {
+                Text(
+                    text = "Permanently delete ${peer.displayName}? This will delete all messages, mutual cryptographic keys, contact details, and P2P connection pairings.",
+                    color = TextSecondary,
+                    fontSize = 13.sp
+                )
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        viewModel.deleteContact(peer.peerId, context)
+                        showDeleteConfirmation = null
+                    },
+                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFFF3B30))
+                ) {
+                    Text("Delete", color = Color.White, fontWeight = FontWeight.Bold)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showDeleteConfirmation = null }) {
+                    Text("Cancel", color = TextSecondary)
+                }
+            }
+        )
+    }
 }
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun PeerGlassListItem(
     item: PeerUiItem,
     isEmergencyMode: Boolean,
-    onClick: () -> Unit
+    onClick: () -> Unit,
+    onLongClick: (() -> Unit)? = null
 ) {
     // Green outline indicates the peer is currently reachable (online on LAN or detected nearby via Wi-Fi Direct).
     val showGreenOutline = if (isEmergencyMode) {
@@ -388,7 +497,10 @@ fun PeerGlassListItem(
         modifier = Modifier
             .fillMaxWidth()
             .height(74.dp)
-            .clickable { onClick() },
+            .combinedClickable(
+                onClick = onClick,
+                onLongClick = onLongClick
+            ),
         cornerRadius = 14.dp,
         borderColor = cardBorderColor,
         borderWidth = cardBorderWidth

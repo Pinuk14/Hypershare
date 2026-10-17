@@ -182,10 +182,10 @@
 ### Week 13 — Multi-Client Group Topology
 **Goal:** Three or more devices join the same WiFi Direct group.
 
-- [ ] Implement client-to-GO connection flow (legacy WifiP2p clients connect to GO's socket)
-- [ ] Implement GO's multi-client `ServerSocket` — accept multiple client connections
-- [ ] Implement `RoutingTable` initial build — GO broadcasts its address, clients register
-- [ ] Test: Device A (GO), Device B and Device C (clients) — all three can exchange HELLO packets
+- [x] Implement client-to-GO connection flow (legacy WifiP2p clients connect to GO's socket)
+- [x] Implement GO's multi-client `ServerSocket` — accept multiple client connections
+- [x] Implement `RoutingTable` initial build — GO broadcasts its address, clients register
+- [x] Test: Device A (GO), Device B and Device C (clients) — all three can exchange HELLO packets
 
 **Deliverable:** 3-device WiFi Direct group with routing table populated on all nodes.
 

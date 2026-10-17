@@ -9,5 +9,6 @@ class HyperShareApplication : Application() {
         super.onCreate()
         LanSocketManager.getInstance().init(this)
         TransferManager.getInstance(this)
+        DeveloperSettingsManager.init(this)
     }
 }

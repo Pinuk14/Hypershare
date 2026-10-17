@@ -20,4 +20,8 @@ class PeerKeyStore {
     fun removePeerKey(peerId: String) {
         keyStore.remove(peerId)
     }
+
+    companion object {
+        val instance = PeerKeyStore()
+    }
 }
